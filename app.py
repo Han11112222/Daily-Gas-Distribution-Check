@@ -1,106 +1,106 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+import re
 
-st.set_page_config(page_title="도시가스 공급실적 대시보드", layout="wide")
+st.set_page_config(page_title="도시가스 공급실적 분석", layout="wide")
+
+def clean_col(name):
+    """컬럼명에서 공백, 줄바꿈, 특수문자를 제거하여 순수 글자만 남깁니다."""
+    return re.sub(r'[^a-zA-Z0-9가-힣]', '', str(name))
 
 def load_data(file_source):
-    # 1. 일단 엑셀을 헤더 없이 통째로 읽습니다.
+    # 1. 엑셀 로드 (헤더 없이 읽어서 진짜 시작점을 찾습니다)
     try:
-        raw_df = pd.read_excel(file_source, sheet_name='연간', header=None)
+        raw = pd.read_excel(file_source, sheet_name='연간', header=None)
     except:
-        raw_df = pd.read_excel(file_source, sheet_name=0, header=None)
+        raw = pd.read_excel(file_source, sheet_name=0, header=None)
 
-    # 2. '날짜'라는 글자가 들어있는 행을 무조건 찾아냅니다.
+    # 2. '날짜'라는 글자가 들어있는 행을 찾습니다.
     header_idx = None
-    for i, row in raw_df.iterrows():
-        # 행의 값 중 '날짜'라는 글자가 포함되어 있으면 그곳이 제목줄입니다.
+    for i, row in raw.iterrows():
         if row.astype(str).str.contains('날짜').any():
             header_idx = i
             break
-    
+            
     if header_idx is None:
-        st.error("❌ 엑셀 시트에서 '날짜' 컬럼 제목을 찾을 수 없습니다. 시트 이름을 확인해주세요.")
+        st.error("❌ '연간' 시트에서 '날짜' 제목을 찾을 수 없습니다. 시트 이름을 확인해주세요.")
         st.stop()
 
-    # 3. 데이터 본체 추출 및 컬럼명 정리
-    df = raw_df.iloc[header_idx+1:].copy()
-    headers = raw_df.iloc[header_idx].astype(str).str.strip().tolist()
-    df.columns = headers
+    # 3. 데이터 추출 및 컬럼명 정제
+    df = raw.iloc[header_idx+1:].copy()
+    raw_cols = raw.iloc[header_idx].values
+    # 모든 컬럼명에서 공백/특수문자 제거 (예: '계획 (GJ)' -> '계획GJ')
+    clean_cols = [clean_col(c) for c in raw_cols]
+    df.columns = clean_cols
 
-    # 4. 컬럼명 매칭 (이름이 정확하지 않아도 위치와 단어로 찾기)
+    # 4. 유연한 컬럼 매칭 (글자 일부만 맞으면 가져옵니다)
     col_map = {}
-    for i, col in enumerate(df.columns):
-        if '날짜' in col: col_map['date'] = col
-        elif '계획' in col and 'GJ' in col: col_map['p_gj'] = col
-        elif '실적' in col and 'GJ' in col: col_map['a_gj'] = col
-        elif '실적' in col and 'm3' in col: col_map['a_m3'] = col
+    for i, c in enumerate(clean_cols):
+        if '날짜' in c: col_map['date'] = i
+        elif '계획' in c and 'GJ' in c: col_map['p_gj'] = i
+        elif '실적' in c and 'GJ' in c: col_map['a_gj'] = i
+        elif '실적' in c and 'm3' in c: col_map['a_m3'] = i
 
-    # 5. 데이터 형식 강제 변환 (에러 방지의 핵심)
-    df['date_dt'] = pd.to_datetime(df[col_map['date']], errors='coerce')
-    df = df.dropna(subset=['date_dt']) # 날짜 없는 줄 삭제
+    # 5. 데이터 타입 강제 변환
+    final_df = pd.DataFrame()
+    final_df['날짜'] = pd.to_datetime(df.iloc[:, col_map['date']], errors='coerce')
+    final_df = final_df.dropna(subset=['날짜']) # 날짜 없는 행 제거
     
-    for key in ['p_gj', 'a_gj', 'a_m3']:
-        if key in col_map:
-            df[key] = pd.to_numeric(df[col_map[key]], errors='coerce').fillna(0)
-        else:
-            df[key] = 0 # 컬럼 못찾으면 0으로 생성
-            
-    return df
+    # 해당 날짜에 맞는 다른 데이터들 붙이기
+    final_df['p_gj'] = pd.to_numeric(df.iloc[:, col_map['p_gj']], errors='coerce').fillna(0)
+    final_df['a_gj'] = pd.to_numeric(df.iloc[:, col_map['a_gj']], errors='coerce').fillna(0)
+    final_df['a_m3'] = pd.to_numeric(df.iloc[:, col_map['a_m3']], errors='coerce').fillna(0)
+    
+    return final_df
 
-# 파일 로딩 섹션
-st.sidebar.header("📂 데이터 관리")
+# 파일 로딩
+st.sidebar.header("📂 데이터 설정")
 uploaded_file = st.sidebar.file_uploader("엑셀 파일 직접 업로드", type=["xlsx"])
 DEFAULT_FILE = "2026_연간_일별공급계획_2.xlsx"
 
 try:
-    if uploaded_file:
-        df = load_data(uploaded_file)
-        st.sidebar.success("✅ 업로드 파일 적용 완료")
-    else:
-        df = load_data(DEFAULT_FILE)
-        st.sidebar.info("ℹ️ GitHub 기본 데이터 로드")
+    df = load_data(uploaded_file if uploaded_file else DEFAULT_FILE)
+    if uploaded_file: st.sidebar.success("✅ 업로드 파일 적용")
+    else: st.sidebar.info("ℹ️ GitHub 기본 파일 사용")
 except Exception as e:
-    st.error(f"⚠️ 데이터 로드 실패: {e}")
-    st.info("파일 이름과 시트 이름('연간')을 다시 확인해주세요.")
+    st.error(f"⚠️ 파일 로드 중 심각한 에러: {e}")
     st.stop()
 
-# 화면 구성
-st.title("📊 도시가스 실적 대시보드 (Han형님 전용)")
-selected_date = st.date_input("조회 기준일 선택", value=df['date_dt'].min())
-target_date = pd.to_datetime(selected_date)
+# 화면 구성 및 계산
+st.title("🔥 도시가스 공급계획 대비 실적 분석")
+selected_date = st.date_input("조회 기준일 선택", value=df['날짜'].min())
+target = pd.to_datetime(selected_date)
 
-# 6. 진도율 계산 로직
-def get_metrics(df, t_date):
-    ytd = df[df['date_dt'] <= t_date]
-    mtd = df[(df['date_dt'] <= t_date) & (df['date_dt'].dt.month == t_date.month)]
-    day = df[df['date_dt'] == t_date]
+# 6. 진도율 계산 (형님의 '일대비 100%면 월대비 100%' 로직)
+def get_metrics(df, t):
+    # 당일 / 당월누적 / 당해누적 필터
+    day_df = df[df['날짜'] == t]
+    mtd_df = df[(df['날짜'] <= t) & (df['날짜'].dt.month == t.month) & (df['날짜'].dt.year == t.year)]
+    ytd_df = df[(df['날짜'] <= t) & (df['날짜'].dt.year == t.year)]
     
     res = {}
-    for label, d in zip(['일간', '월간누계', '연간누계'], [day, mtd, ytd]):
+    for label, d in zip(['일간', '월간누계', '연간누계'], [day_df, mtd_df, ytd_df]):
         p = d['p_gj'].sum()
         a = d['a_gj'].sum()
-        # 천 m3 환산
-        m3 = d['a_m3'].sum() / 1000 
-        # 0으로 나누기 방지
+        m3 = d['a_m3'].sum() / 1000 # 천 m3 환산
         ach = (a / p * 100) if p > 0 else 0
         res[label] = {'p': p, 'a': a, 'm3': m3, 'ach': ach}
     return res
 
-m = get_metrics(df, target_date)
+m = get_metrics(df, target)
 
-# 7. 메트릭 레이아웃
+# 7. 메트릭 출력
 c1, c2, c3 = st.columns(3)
 with c1:
     st.metric("오늘 실적 (GJ)", f"{m['일간']['a']:,.0f}", f"{m['일간']['ach']-100:.1f}%")
     st.caption(f"당일 계획: {m['일간']['p']:,.0f} GJ")
 with c2:
     st.metric("월간 진도율 (MTD)", f"{m['월간누계']['ach']:.1f}%", f"{m['월간누계']['a'] - m['월간누계']['p']:,.0f} GJ")
-    st.write(f"누적 실적: {m['월간누계']['m3']:,.1f} (천 m3)")
+    st.write(f"누적실적: {m['월간누계']['m3']:,.1f} (천 m3)")
 with c3:
     st.metric("연간 진도율 (YTD)", f"{m['연간누계']['ach']:.1f}%")
-    st.write(f"누적 계획: {m['연간누계']['p']:,.0f} GJ")
+    st.write(f"누적계획: {m['연간누계']['p']:,.0f} GJ")
 
 st.divider()
-st.subheader("📋 선택일 상세 데이터")
-st.dataframe(df[df['date_dt'] == target_date], use_container_width=True)
+st.subheader("📋 상세 데이터 (선택일)")
+st.table(df[df['날짜'] == target])
