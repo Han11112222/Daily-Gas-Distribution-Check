@@ -26,7 +26,7 @@ set_korean_font()
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (입력형)
+# [탭 1] 도시가스 공급실적 관리 (랭킹 분석 & 폭죽 기능 추가)
 # ==============================================================================
 def run_tab1_management():
     # --- 내부 함수 ---
@@ -81,6 +81,45 @@ def run_tab1_management():
 
         return df, None
 
+    # [미미의 기능 추가] 과거 데이터 로드하여 랭킹 계산
+    def get_ranking_info(current_val_gj, target_month):
+        try:
+            # 기본 경로의 분석용 파일 로드
+            history_path = Path(__file__).parent / "공급량(계획_실적).xlsx"
+            if not history_path.exists():
+                return "-", "-", False
+            
+            xls = pd.ExcelFile(history_path, engine='openpyxl')
+            if "일별실적" not in xls.sheet_names:
+                return "-", "-", False
+            
+            hist_df = xls.parse("일별실적")
+            # MJ -> GJ 변환 (분석 파일은 MJ 단위)
+            if "공급량(MJ)" in hist_df.columns:
+                hist_vals = pd.to_numeric(hist_df["공급량(MJ)"], errors='coerce').fillna(0) / 1000.0
+            else:
+                return "-", "-", False
+            
+            # 날짜 파싱
+            hist_df["일자"] = pd.to_datetime(hist_df["일자"], errors='coerce')
+            
+            # 1. 역대 전체 랭킹 (내림차순 정렬했을 때 내 위치)
+            # 현재값보다 큰 값이 몇 개인지 + 1
+            rank_all = (hist_vals > current_val_gj).sum() + 1
+            
+            # 2. 동월 랭킹
+            same_month_mask = hist_df["일자"].dt.month == target_month
+            month_vals = hist_vals[same_month_mask]
+            rank_month = (month_vals > current_val_gj).sum() + 1
+            
+            is_new_record = (rank_all == 1) or (rank_month == 1)
+            
+            return rank_all, rank_month, is_new_record
+            
+        except Exception:
+            return "-", "-", False
+
+    # --- 데이터 로드 로직 ---
     if 'data_tab1' not in st.session_state:
         st.session_state.data_tab1 = None
 
@@ -144,12 +183,42 @@ def run_tab1_management():
 
     metrics = calc_kpi(df, target_date)
 
+    # 랭킹 계산 (실적이 0보다 클 때만)
+    current_gj = metrics['Day']['gj']['a']
+    rank_all_str, rank_month_str = "-", "-"
+    if current_gj > 0:
+        r_all, r_month, is_record = get_ranking_info(current_gj, target_date.month)
+        rank_all_str = f"{r_all}위" if r_all != "-" else "-"
+        rank_month_str = f"{r_month}위" if r_month != "-" else "-"
+        
+        # 🎉 1위 달성 시 폭죽 발사!
+        if is_record:
+            st.balloons()
+            st.toast(f"🎉 축하합니다! {target_date.strftime('%Y-%m-%d')} 공급량이 1위를 달성했습니다!", icon="🏆")
+
     st.markdown("### 🔥 열량 실적 (GJ)")
     col_g1, col_g2, col_g3 = st.columns(3)
+    
+    # 1. 일간 실적 (랭킹 표시 추가)
     with col_g1:
         m = metrics['Day']['gj']
         st.metric(label=f"일간 달성률 {m['rate']:.1f}%", value=f"{int(m['a']):,} GJ", delta=f"{int(m['diff']):+,} GJ")
         st.caption(f"계획: {int(m['p']):,} GJ")
+        
+        # [미미의 수정] 붉은색 박스 스타일로 랭킹 표시
+        if current_gj > 0:
+            st.markdown(
+                f"""
+                <div style="background-color:#FFF5F5; border:1px solid #FF4B4B; border-radius:8px; padding:8px; margin-top:5px;">
+                    <div style="color:#333; font-size:14px;">🏆 역대 전체: <b>{rank_all_str}</b></div>
+                    <div style="color:#333; font-size:14px;">📅 역대 {target_date.month}월: <b>{rank_month_str}</b></div>
+                </div>
+                """, 
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown("<div style='font-size:13px; color:#999; margin-top:5px;'>실적 입력 대기 중...</div>", unsafe_allow_html=True)
+
     with col_g2:
         m = metrics['MTD']['gj']
         st.metric(label=f"월간 누적 달성률 {m['rate']:.1f}%", value=f"{int(m['a']):,} GJ", delta=f"{int(m['diff']):+,} GJ")
@@ -177,7 +246,7 @@ def run_tab1_management():
 
     st.markdown("---")
     st.subheader(f"📝 {target_date.month}월 실적 입력")
-    st.info("💡 값을 수정하고 엔터(Enter)를 치면 상단 그래프가 즉시 업데이트됩니다.")
+    st.info("💡 값을 수정하고 엔터(Enter)를 치면 상단 그래프 및 랭킹이 즉시 업데이트됩니다.")
 
     mask_month = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
 
@@ -228,7 +297,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (Han형님 요청: 일별 분석 + 미미의 폭죽 이벤트)
+# [탭 2] 공급량 분석 (일별 분석 + Han형님 요청 스타일링)
 # ==============================================================================
 def run_tab2_analysis():
     # --- 분석용 헬퍼 함수 ---
@@ -292,10 +361,6 @@ def run_tab2_analysis():
         supply_str = f"{row['공급량_GJ']:,.1f} GJ"
         temp_str = f"{row['평균기온(℃)']:.1f}℃" if not pd.isna(row["평균기온(℃)"]) else "-"
         
-        # 1위일 경우 폭죽 효과!
-        if rank_all == 1 or rank_month == 1:
-            st.balloons()
-
         html = f"""<div style="border-radius:20px;padding:16px 20px;background:{gradient};box-shadow:0 4px 14px rgba(0,0,0,0.06);margin-top:8px;">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;"><div style="font-size:26px;">{icon}</div><div style="font-size:15px;font-weight:700;">최대 공급량 기록 {rank}위</div></div>
         <div style="font-size:14px;margin-bottom:3px;">📅 <b>{date_str}</b></div>
@@ -364,7 +429,7 @@ def run_tab2_analysis():
         act_col = "공급량(MJ)"
         if act_col not in day_df.columns: return
         
-        # 1. 계획 컬럼 자동 찾기 (사업계획 우선)
+        # 1. 계획 컬럼 자동 찾기
         plan_cols = [c for c in month_df.columns if "계획" in c and "MJ" in c]
         if not plan_cols:
             st.warning("월별 계획(MJ) 컬럼을 찾을 수 없습니다.")
@@ -392,11 +457,11 @@ def run_tab2_analysis():
         this_df = df_all[(df_all["연"] == sel_year) & (df_all["월"] == sel_month)].copy()
         
         # 3. 차트 그리기
-        st.markdown("### 📈 일별 패턴 비교 (최근 3년 + 계획)")
+        st.markdown(f"### 📈 {sel_month}월 일별 패턴 비교 (최근 3년 + 계획)")
         cand_years = sorted(df_all["연"].unique().tolist())
         past_candidates = [y for y in cand_years if y < sel_year]
         
-        # [Han형님 요청] 최근 3년 실적을 기본값으로 (2023, 2024, 2025)
+        # [미미] 최근 3년 실적을 기본값으로 (2023, 2024, 2025)
         recent_3_years = [y for y in [2023, 2024, 2025] if y in past_candidates]
         default_years = recent_3_years if recent_3_years else past_candidates[-3:]
         
@@ -404,18 +469,17 @@ def run_tab2_analysis():
         
         fig1 = go.Figure()
         
-        # (1) [Han형님 요청] 2026년 계획 (붉은색 점선, 가장 잘 보이게)
+        # (1) [미미] 2026년 계획 (붉은색 점선)
         fig1.add_scatter(
             x=list(range(1, days_in_month + 1)), 
             y=[daily_plan_gj] * days_in_month, 
             mode="lines", 
             name=f"{sel_year}년 {sel_month}월 계획(사업계획)", 
-            line=dict(color="#FF4B4B", width=3, dash="dot") # Streamlit Red
+            line=dict(color="#FF4B4B", width=3, dash="dot")
         )
 
         # (2) 과거 연도 실적 (실선)
-        # 색상 팔레트 (파란 계열)
-        colors = ["#A6C9E2", "#6BAED6", "#3182BD", "#08519C"] 
+        colors = ["#A6C9E2", "#6BAED6", "#3182BD", "#08519C", "#9E9AC8", "#756BB1"] 
         for idx, y in enumerate(past_years):
             sub = df_all[(df_all["연"] == y) & (df_all["월"] == sel_month)].copy()
             if sub.empty: continue
@@ -427,7 +491,7 @@ def run_tab2_analysis():
                 line=dict(color=color, width=2)
             )
             
-        # (3) 당년도(2026) 실적 (있다면 진한 검정 실선)
+        # (3) 당년도(2026) 실적 (진한 검정 실선)
         if not this_df.empty: 
             fig1.add_scatter(
                 x=this_df["일"], y=this_df[act_col] / 1000.0, 
@@ -458,9 +522,9 @@ def run_tab2_analysis():
             show["일별실적(GJ)"] = show["일별실적(GJ)"].apply(lambda v: v / 1000.0)
             st.dataframe(center_style(show.style.format("{:,.1f}", subset=["일별실적(GJ)", "편차(GJ)"])), use_container_width=True, hide_index=True)
 
-        # 5. Top 랭킹 (미미의 선물: 랭킹 상세 분석 & 폭죽)
+        # 5. Top 랭킹
         st.markdown("---")
-        st.markdown("### 💎 일별 공급량 Top 랭킹 (미미's Pick)")
+        st.markdown("### 💎 일별 공급량 Top 랭킹")
         month_all = df_all[df_all["월"] == sel_month].copy()
         if not month_all.empty:
             top_n = st.slider("표시할 순위 개수", 5, 50, 10, 5, key=f"{key_prefix}top_n")
@@ -470,7 +534,7 @@ def run_tab2_analysis():
             rank_df = month_all.sort_values("공급량_GJ", ascending=False).head(top_n).copy()
             rank_df.insert(0, "Rank", range(1, len(rank_df) + 1))
             
-            # Top 3 카드 렌더링
+            # Top 3 카드
             top3 = rank_df.head(3)
             c1, c2, c3 = st.columns(3)
             cols = [c1, c2, c3]
@@ -478,9 +542,8 @@ def run_tab2_analysis():
             
             for i, (_, row) in enumerate(top3.iterrows()):
                 val = row[act_col]
-                # [미미의 계산] 역대 전체 랭킹 & 역대 동월 랭킹 계산
+                # [미미의 랭킹 계산]
                 rank_all = df_all[df_all[act_col] > val].shape[0] + 1
-                
                 same_month_df = df_all[df_all['월'] == row['월']]
                 rank_month = same_month_df[same_month_df[act_col] > val].shape[0] + 1
                 
@@ -498,7 +561,6 @@ def run_tab2_analysis():
             gc1, gc2, gc3 = st.columns(3)
             gcols = [gc1, gc2, gc3]
             for i, (_, row) in enumerate(g_top3.iterrows()):
-                # 전체 1위는 무조건 폭죽!
                 val = row[act_col]
                 rank_all = df_all[df_all[act_col] > val].shape[0] + 1
                 same_month_df = df_all[df_all['월'] == row['월']]
@@ -519,7 +581,7 @@ def run_tab2_analysis():
                 xs = np.linspace(x.min() - 1, x.max() + 1, 150)
                 fig3 = go.Figure()
                 fig3.add_scatter(x=x, y=y, mode="markers", name="일별 데이터", marker=dict(size=7, opacity=0.7))
-                fig3.add_scatter(x=xs, y=p(xs), mode="lines", name="3차 다항 회귀", line=dict(color=COLOR_DIFF, width=2))
+                fig3.add_scatter(x=xs, y=p(xs), mode="lines", name="3차 다항 회귀", line=dict(color="#FF4B4B", width=2))
                 fig3.update_layout(title=f"{sel_month}월 기온별 공급량", xaxis_title="기온(℃)", yaxis_title="공급량 (GJ)", margin=dict(l=10, r=10, t=40, b=10))
                 st.plotly_chart(fig3, use_container_width=True)
 
@@ -563,12 +625,10 @@ def run_tab2_analysis():
             long_dummy["값"] = pd.to_numeric(month_df[act_col], errors="coerce")
             long_dummy = long_dummy.dropna(subset=["값"])
             
-            # Han형님 요청: 계획기준 선택 삭제 -> 자동으로 찾아서 넘김
             sel_year, sel_month, years_all = render_section_selector_daily(long_dummy, "공급량(일) 기준 선택", "supplyD_base_")
             st.markdown("---")
             
-            # dummy 인자 전달 (plan_choice, plan_label은 이제 함수 안에서 자동 처리하지만, 함수 시그니처 유지를 위해 None 전달해도 됨. 
-            # 하지만 안전하게 내부에서 무시하도록 로직 수정함)
+            # dummy 인자 전달 (plan_choice, plan_label 자동 처리)
             supply_daily_main_logic(day_df, month_df, sel_year, sel_month, key_prefix="supplyD_")
     else:
         st.info("👈 좌측 사이드바에서 '공급량(계획_실적).xlsx' 파일을 업로드해주세요.")
