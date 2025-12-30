@@ -26,7 +26,7 @@ set_korean_font()
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (랭킹 기능 복구 완료)
+# [탭 1] 도시가스 공급실적 관리 (역대/동월 랭킹 기능 적용)
 # ==============================================================================
 def run_tab1_management():
     # --- 내부 함수 ---
@@ -80,6 +80,47 @@ def run_tab1_management():
             return None, f"❌ 데이터 변환 오류: {e}"
 
         return df, None
+
+    # [랭킹용] 과거 데이터 로드 함수 (Tab 1에서도 사용하기 위해 추가)
+    def get_historical_ranks(current_val, target_date):
+        # 1. 파일 찾기
+        history_file = Path(__file__).parent / "공급량(계획_실적).xlsx"
+        if not history_file.exists():
+            return None # 파일 없으면 계산 안함
+
+        try:
+            # 2. 데이터 로드 (필요한 컬럼만 빠르게)
+            xls = pd.ExcelFile(history_file, engine="openpyxl")
+            sheet_name = "월별계획_실적" if "월별계획_실적" in xls.sheet_names else xls.sheet_names[0]
+            df_hist = pd.read_excel(xls, sheet_name=sheet_name)
+            
+            # 3. 전처리
+            act_col = "실적_공급량(MJ)" # 과거 데이터 컬럼명 확인
+            if act_col not in df_hist.columns: return None
+
+            df_hist = df_hist.dropna(subset=[act_col])
+            # MJ -> GJ 변환 (과거 데이터는 보통 MJ 단위가 많음, 확인 필요. 여기선 /1000)
+            # 만약 과거 데이터가 이미 GJ라면 나누기 1000을 제거해야 합니다.
+            # *통상적 도시가스 데이터셋 기준 MJ로 가정하고 /1000*
+            hist_vals = df_hist[act_col] / 1000.0 
+            
+            # 4. 랭킹 계산
+            # (1) 역대 전체 랭킹
+            # 현재값보다 큰 과거 데이터 개수 + 1
+            rank_all = (hist_vals > current_val).sum() + 1
+            
+            # (2) 역대 동월 랭킹
+            # 월 컬럼이 있는지 확인
+            if '월' in df_hist.columns:
+                df_hist['월'] = pd.to_numeric(df_hist['월'], errors='coerce')
+                month_vals = df_hist[df_hist['월'] == target_date.month][act_col] / 1000.0
+                rank_month = (month_vals > current_val).sum() + 1
+            else:
+                rank_month = "-"
+                
+            return f"🏆 역대 전체: {rank_all}위  /  📅 역대 {target_date.month}월: {rank_month}위"
+        except:
+            return None
 
     if 'data_tab1' not in st.session_state:
         st.session_state.data_tab1 = None
@@ -144,16 +185,16 @@ def run_tab1_management():
 
     metrics = calc_kpi(df, target_date)
 
-    # [수정] Han형님 요청으로 랭킹 기능 부활 (금년도 기준)
-    # 현재 조회일자의 실적(GJ) 가져오기
+    # [수정] Han형님 요청: 금년 랭킹 삭제 -> 역대 전체 / 역대 동월 랭킹 표시
     current_val = metrics['Day']['gj']['a']
     rank_text = ""
+    
+    # 실적값이 0보다 클 때만 랭킹 계산 시도
     if current_val > 0:
-        # 0보다 큰 실적들 중에서 순위 계산 (내림차순)
-        valid_df = df[df['실적(GJ)'] > 0]
-        rank = valid_df[valid_df['실적(GJ)'] > current_val].shape[0] + 1
-        total_days = len(valid_df)
-        rank_text = f"🏆 금년 실적 {rank}위 (총 {total_days}일 중)"
+        # 별도 파일(공급량 히스토리)을 읽어서 랭킹 계산
+        rank_info = get_historical_ranks(current_val, target_date)
+        if rank_info:
+            rank_text = rank_info
 
     st.markdown("### 🔥 열량 실적 (GJ)")
     col_g1, col_g2, col_g3 = st.columns(3)
@@ -163,7 +204,7 @@ def run_tab1_management():
         st.metric(label=f"일간 달성률 {m['rate']:.1f}%", value=f"{int(m['a']):,} GJ", delta=f"{int(m['diff']):+,} GJ")
         st.caption(f"계획: {int(m['p']):,} GJ")
         if rank_text:
-            st.info(rank_text) # 랭킹 표시 부활
+            st.info(rank_text) # 역대 랭킹 표시
 
     with col_g2:
         m = metrics['MTD']['gj']
@@ -243,7 +284,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정사항 반영됨)
+# [탭 2] 공급량 분석
 # ==============================================================================
 def run_tab2_analysis():
     # --- 분석용 헬퍼 함수 ---
@@ -264,7 +305,6 @@ def run_tab2_analysis():
         return (xls.parse("월별계획_실적") if "월별계획_실적" in xls.sheet_names else pd.DataFrame(),
                 xls.parse("일별실적") if "일별실적" in xls.sheet_names else pd.DataFrame())
     
-    # [미미] 2026년 일별 계획을 읽기 위한 전용 로더
     def load_2026_plan_file():
         try:
             path = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
@@ -340,7 +380,6 @@ def run_tab2_analysis():
         st.markdown(f"<div style='margin-top:-4px;font-size:13px;color:#666;'>선택 기준: <b>{sel_year}년 {sel_month}월</b></div>", unsafe_allow_html=True)
         return sel_year, sel_month, years_all
 
-    # [수정] Han형님 요청으로 하단 랭킹 텍스트 삭제
     def _render_supply_top_card(rank, row, icon, gradient):
         date_str = f"{int(row['연'])}년 {int(row['월'])}월 {int(row['일'])}일"
         supply_str = f"{row['공급량_GJ']:,.1f} GJ"
@@ -417,24 +456,24 @@ def run_tab2_analysis():
         df_all["일"] = df_all["일자"].dt.day
         this_df = df_all[(df_all["연"] == sel_year) & (df_all["월"] == sel_month)].copy()
         
-        # [미미] 2026 일별 계획 데이터 로드
+        # 2026 일별 계획 데이터 로드
         plan_df = load_2026_plan_file()
         plan_curve_x = []
         plan_curve_y = []
         
         if plan_df is not None:
-            # 선택된 월의 계획만 필터링
             plan_month = plan_df[plan_df['날짜'].dt.month == sel_month]
             if not plan_month.empty:
                 plan_curve_x = plan_month['날짜'].dt.day.tolist()
                 plan_curve_y = plan_month['plan_gj'].tolist()
         
         # 3. 차트 그리기
-        st.markdown(f"### 📈 {sel_month}월 일별 패턴 비교 (최근 3년 + 계획)")
+        # [수정] Han형님 요청: 타이틀의 '(최근 3년 + 계획)' 문구 삭제
+        st.markdown(f"### 📈 {sel_month}월 일별 패턴 비교")
         cand_years = sorted(df_all["연"].unique().tolist())
         past_candidates = [y for y in cand_years if y < sel_year]
         
-        # [수정] 기본적으로 최근 2개년만 보여주기 (Han형님 요청)
+        # 기본적으로 최근 2개년만 보여주기
         default_years = past_candidates[-2:] if len(past_candidates) >= 2 else past_candidates
         
         past_years = st.multiselect("과거 연도 선택", options=past_candidates, default=default_years, key=f"{key_prefix}past_years")
@@ -451,7 +490,7 @@ def run_tab2_analysis():
                 line=dict(color="#FF4B4B", width=3, dash="dot")
             )
 
-        # (2) 과거 연도 실적 (수정: 직전 연도는 진하게, 그 외는 파스텔톤)
+        # (2) 과거 연도 실적
         pastel_colors = ["#93C5FD", "#A5B4FC", "#C4B5FD", "#FDA4AF", "#FCA5A5", "#FCD34D", "#86EFAC"]
         prev_year = sel_year - 1
 
@@ -459,9 +498,9 @@ def run_tab2_analysis():
             sub = df_all[(df_all["연"] == y) & (df_all["월"] == sel_month)].copy()
             if sub.empty: continue
             
-            # [수정] 스타일 로직
+            # 스타일 로직: 직전 연도는 진하게
             if y == prev_year:
-                line_color = "#3B82F6"  # 진한 파란색
+                line_color = "#3B82F6"
                 line_width = 3
                 op_mode = "lines+markers"
             else:
@@ -547,18 +586,17 @@ def run_tab2_analysis():
                     
             st.dataframe(center_style(global_top[["Rank", "공급량_GJ", "연", "월", "일", "평균기온(℃)"]].style.format({"공급량_GJ": "{:,.1f}", "평균기온(℃)": "{:,.1f}"})), use_container_width=True, hide_index=True)
 
-            # [수정] 3차 다항식 오류 수정 (0 이하 값 제외 및 이상치 처리)
+            # 3차 다항식
             st.markdown("#### 🌡️ 기온별 공급량 변화 (3차 다항식)")
             temp_supply = month_all.dropna(subset=["평균기온(℃)", act_col]).copy()
             
-            # [Fix] 공급량이 100 이상인 유효한 데이터만 사용 (0값 오류 방지)
+            # 공급량이 100 이상인 유효한 데이터만 사용
             temp_supply = temp_supply[temp_supply[act_col] > 100]
 
             if len(temp_supply) > 4:
                 x = temp_supply["평균기온(℃)"].values
                 y = temp_supply[act_col].values / 1000.0
                 
-                # 다항 회귀 적합
                 coeffs = np.polyfit(x, y, 3)
                 p = np.poly1d(coeffs)
                 xs = np.linspace(x.min() - 1, x.max() + 1, 150)
