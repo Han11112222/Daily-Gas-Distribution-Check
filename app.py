@@ -26,7 +26,7 @@ set_korean_font()
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (역대/동월 랭킹 기능 적용)
+# [탭 1] 도시가스 공급실적 관리 (랭킹 오류 수정 완료)
 # ==============================================================================
 def run_tab1_management():
     # --- 내부 함수 ---
@@ -81,45 +81,43 @@ def run_tab1_management():
 
         return df, None
 
-    # [랭킹용] 과거 데이터 로드 함수 (Tab 1에서도 사용하기 위해 추가)
+    # [랭킹용] 과거 데이터 로드 및 비교 함수 (수정됨: 순수 일별 데이터만 필터링)
     def get_historical_ranks(current_val, target_date):
-        # 1. 파일 찾기
         history_file = Path(__file__).parent / "공급량(계획_실적).xlsx"
         if not history_file.exists():
-            return None # 파일 없으면 계산 안함
+            return None 
 
         try:
-            # 2. 데이터 로드 (필요한 컬럼만 빠르게)
             xls = pd.ExcelFile(history_file, engine="openpyxl")
             sheet_name = "월별계획_실적" if "월별계획_실적" in xls.sheet_names else xls.sheet_names[0]
             df_hist = pd.read_excel(xls, sheet_name=sheet_name)
             
-            # 3. 전처리
-            act_col = "실적_공급량(MJ)" # 과거 데이터 컬럼명 확인
+            act_col = "실적_공급량(MJ)"
             if act_col not in df_hist.columns: return None
 
-            df_hist = df_hist.dropna(subset=[act_col])
-            # MJ -> GJ 변환 (과거 데이터는 보통 MJ 단위가 많음, 확인 필요. 여기선 /1000)
-            # 만약 과거 데이터가 이미 GJ라면 나누기 1000을 제거해야 합니다.
-            # *통상적 도시가스 데이터셋 기준 MJ로 가정하고 /1000*
+            # [중요 수정] 연, 월, 일이 모두 숫자로 존재하는 행만 남김 (합계/소계 행 제거)
+            df_hist = df_hist.dropna(subset=[act_col, '연', '월', '일'])
+            df_hist['일'] = pd.to_numeric(df_hist['일'], errors='coerce')
+            df_hist = df_hist.dropna(subset=['일']) # '일'이 숫자가 아니면 제거
+
+            # 단위 변환 (MJ -> GJ)
             hist_vals = df_hist[act_col] / 1000.0 
             
-            # 4. 랭킹 계산
             # (1) 역대 전체 랭킹
-            # 현재값보다 큰 과거 데이터 개수 + 1
             rank_all = (hist_vals > current_val).sum() + 1
             
             # (2) 역대 동월 랭킹
-            # 월 컬럼이 있는지 확인
             if '월' in df_hist.columns:
                 df_hist['월'] = pd.to_numeric(df_hist['월'], errors='coerce')
                 month_vals = df_hist[df_hist['월'] == target_date.month][act_col] / 1000.0
                 rank_month = (month_vals > current_val).sum() + 1
             else:
                 rank_month = "-"
-                
-            return f"🏆 역대 전체: {rank_all}위  /  📅 역대 {target_date.month}월: {rank_month}위"
-        except:
+            
+            # 1위일 경우 폭죽 효과 텍스트 추가
+            firecracker = "🎉" if rank_all == 1 else ""
+            return f"{firecracker} 🏆 역대 전체: {rank_all}위  /  📅 역대 {target_date.month}월: {rank_month}위"
+        except Exception as e:
             return None
 
     if 'data_tab1' not in st.session_state:
@@ -185,13 +183,10 @@ def run_tab1_management():
 
     metrics = calc_kpi(df, target_date)
 
-    # [수정] Han형님 요청: 금년 랭킹 삭제 -> 역대 전체 / 역대 동월 랭킹 표시
     current_val = metrics['Day']['gj']['a']
     rank_text = ""
     
-    # 실적값이 0보다 클 때만 랭킹 계산 시도
     if current_val > 0:
-        # 별도 파일(공급량 히스토리)을 읽어서 랭킹 계산
         rank_info = get_historical_ranks(current_val, target_date)
         if rank_info:
             rank_text = rank_info
@@ -204,7 +199,7 @@ def run_tab1_management():
         st.metric(label=f"일간 달성률 {m['rate']:.1f}%", value=f"{int(m['a']):,} GJ", delta=f"{int(m['diff']):+,} GJ")
         st.caption(f"계획: {int(m['p']):,} GJ")
         if rank_text:
-            st.info(rank_text) # 역대 랭킹 표시
+            st.info(rank_text)
 
     with col_g2:
         m = metrics['MTD']['gj']
@@ -284,7 +279,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석
+# [탭 2] 공급량 분석 (타이틀 수정 완료)
 # ==============================================================================
 def run_tab2_analysis():
     # --- 분석용 헬퍼 함수 ---
@@ -321,7 +316,6 @@ def run_tab2_analysis():
             df = raw.iloc[header_idx+1:].copy()
             df.columns = raw.iloc[header_idx].astype(str).str.replace(r'\s+', '', regex=True).tolist()
             
-            # 컬럼 매칭
             col_map = {}
             for c in df.columns:
                 if '연' in c: col_map['y'] = c
@@ -467,20 +461,18 @@ def run_tab2_analysis():
                 plan_curve_x = plan_month['날짜'].dt.day.tolist()
                 plan_curve_y = plan_month['plan_gj'].tolist()
         
-        # 3. 차트 그리기
-        # [수정] Han형님 요청: 타이틀의 '(최근 3년 + 계획)' 문구 삭제
+        # [수정] 차트 제목에서 불필요한 텍스트 삭제
         st.markdown(f"### 📈 {sel_month}월 일별 패턴 비교")
         cand_years = sorted(df_all["연"].unique().tolist())
         past_candidates = [y for y in cand_years if y < sel_year]
         
-        # 기본적으로 최근 2개년만 보여주기
         default_years = past_candidates[-2:] if len(past_candidates) >= 2 else past_candidates
         
         past_years = st.multiselect("과거 연도 선택", options=past_candidates, default=default_years, key=f"{key_prefix}past_years")
         
         fig1 = go.Figure()
         
-        # (1) 2026년 실제 계획 (붉은색 점선)
+        # (1) 2026년 실제 계획
         if plan_curve_x:
             fig1.add_scatter(
                 x=plan_curve_x, 
@@ -498,7 +490,6 @@ def run_tab2_analysis():
             sub = df_all[(df_all["연"] == y) & (df_all["월"] == sel_month)].copy()
             if sub.empty: continue
             
-            # 스타일 로직: 직전 연도는 진하게
             if y == prev_year:
                 line_color = "#3B82F6"
                 line_width = 3
@@ -515,7 +506,7 @@ def run_tab2_analysis():
                 line=dict(color=line_color, width=line_width)
             )
             
-        # (3) 당년도 실적 (진한 검정 실선)
+        # (3) 당년도 실적
         if not this_df.empty: 
             fig1.add_scatter(
                 x=this_df["일"], y=this_df[act_col] / 1000.0, 
@@ -590,7 +581,6 @@ def run_tab2_analysis():
             st.markdown("#### 🌡️ 기온별 공급량 변화 (3차 다항식)")
             temp_supply = month_all.dropna(subset=["평균기온(℃)", act_col]).copy()
             
-            # 공급량이 100 이상인 유효한 데이터만 사용
             temp_supply = temp_supply[temp_supply[act_col] > 100]
 
             if len(temp_supply) > 4:
