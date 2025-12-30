@@ -26,7 +26,7 @@ set_korean_font()
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (랭킹 오류 완벽 해결)
+# [탭 1] 도시가스 공급실적 관리 (날짜 매칭 오류 수정판)
 # ==============================================================================
 def run_tab1_management():
     # --- 내부 함수 ---
@@ -63,25 +63,29 @@ def run_tab1_management():
             elif '실적' in c and 'm3' in c: col_map['a_m3'] = c
 
         try:
+            # 날짜 생성
             df['날짜'] = pd.to_datetime({
                 'year': pd.to_numeric(df[col_map['y']], errors='coerce'),
                 'month': pd.to_numeric(df[col_map['m']], errors='coerce'),
                 'day': pd.to_numeric(df[col_map['d']], errors='coerce')
             }, errors='coerce')
             df = df.dropna(subset=['날짜'])
+            
+            # [중요] 날짜 비교를 위해 문자열 컬럼 추가 (매칭 정확도 향상)
+            df['날짜_str'] = df['날짜'].dt.strftime('%Y-%m-%d')
 
             df['계획(GJ)'] = pd.to_numeric(df[col_map.get('p_gj')], errors='coerce').fillna(0)
             df['실적(GJ)'] = pd.to_numeric(df[col_map.get('a_gj')], errors='coerce').fillna(0)
             df['계획(m3)'] = pd.to_numeric(df[col_map.get('p_m3')], errors='coerce').fillna(0)
             df['실적(m3)'] = pd.to_numeric(df[col_map.get('a_m3')], errors='coerce').fillna(0)
             
-            df = df[['날짜', '계획(GJ)', '실적(GJ)', '계획(m3)', '실적(m3)']]
+            df = df[['날짜', '날짜_str', '계획(GJ)', '실적(GJ)', '계획(m3)', '실적(m3)']]
         except Exception as e:
             return None, f"❌ 데이터 변환 오류: {e}"
 
         return df, None
 
-    # [핵심] 과거 데이터 로드 및 랭킹 산출 함수 (초강력 필터 적용)
+    # [핵심] 과거 데이터 로드 및 랭킹 산출 함수
     def get_historical_ranks(current_val, target_date):
         history_file = Path(__file__).parent / "공급량(계획_실적).xlsx"
         
@@ -89,7 +93,7 @@ def run_tab1_management():
             return None 
 
         try:
-            # 1. 파일 읽기 (헤더 찾기 로직 포함)
+            # 1. 파일 읽기
             xls = pd.ExcelFile(history_file, engine="openpyxl")
             sheet_name = "월별계획_실적" if "월별계획_실적" in xls.sheet_names else xls.sheet_names[0]
             
@@ -117,8 +121,7 @@ def run_tab1_management():
             
             if col_act is None: return None
 
-            # 3. 데이터 정제 (여기가 핵심!)
-            # 숫자로 변환 안되는 것들(텍스트 등) 모두 제거
+            # 3. 데이터 정제
             df_hist[col_act] = pd.to_numeric(df_hist[col_act], errors='coerce')
             df_hist = df_hist.dropna(subset=[col_act])
 
@@ -127,12 +130,11 @@ def run_tab1_management():
             if 'MJ' in col_act:
                 vals = vals / 1000.0
             
-            # [필터] 값이 0 이하이거나, 2,000,000 이상인 경우(월간 합계일 확률 99%) 제거
-            # Han형님의 144위 문제는 여기서 해결됩니다. (합계 데이터 제거)
+            # [필터] 합계 데이터(200만 이상) 제외 및 0 이하 제외
             valid_mask = (vals > 0) & (vals < 2000000)
             clean_vals = vals[valid_mask]
             
-            # 4. 순위 계산 (입력값 vs 과거값들)
+            # 4. 순위 계산
             # (1) 역대 전체 랭킹
             rank_all = (clean_vals > current_val).sum() + 1
             
@@ -140,22 +142,20 @@ def run_tab1_management():
             rank_month = "-"
             if col_month:
                 df_hist[col_month] = pd.to_numeric(df_hist[col_month], errors='coerce')
-                # 위에서 만든 valid_mask와 월 조건을 동시에 만족하는 데이터만 추출
+                # 월 조건 + 유효값 조건
                 month_mask = (df_hist[col_month] == target_date.month) & (df_hist.index.isin(df_hist[valid_mask].index))
                 
-                # 원본에서 다시 가져오기보다는, 마스크로 필터링
                 month_vals_raw = df_hist.loc[month_mask, col_act].values
                 if 'MJ' in col_act:
                     month_vals_clean = month_vals_raw / 1000.0
                 else:
                     month_vals_clean = month_vals_raw
                 
-                # 합계 데이터 2차 방어 (혹시 몰라 한 번 더 필터)
+                # 2차 방어
                 month_vals_clean = month_vals_clean[month_vals_clean < 2000000]
                 
                 rank_month = (month_vals_clean > current_val).sum() + 1
             
-            # 1위일 경우 폭죽
             firecracker = "🎉" if rank_all == 1 else ""
             return f"{firecracker} 🏆 역대 전체: {rank_all}위  /  📅 역대 {target_date.month}월: {rank_month}위"
             
@@ -192,21 +192,27 @@ def run_tab1_management():
         st.warning("👈 좌측 사이드바에서 엑셀 파일을 업로드해주세요.")
         return
 
-    # 세션에 저장된 데이터프레임을 가져옵니다.
     df = st.session_state.data_tab1
 
     st.title("🔥 도시가스 공급실적 관리")
 
     col_date, col_space = st.columns([1, 5])
     with col_date:
-        selected_date = st.date_input("조회 기준일", value=df['날짜'].min(), label_visibility="collapsed")
-    target_date = pd.to_datetime(selected_date)
+        # Date Input
+        selected_date = st.date_input("조회 기준일", value=df['날짜'].min(), key='date_picker', label_visibility="collapsed")
+    
+    # [수정] 날짜 비교를 위한 문자열 변환 (YYYY-MM-DD)
+    target_date_str = selected_date.strftime('%Y-%m-%d')
+    target_date_obj = pd.to_datetime(selected_date) # 랭킹 함수용 (월 추출 등)
 
-    # 1. KPI 계산 함수
-    def calc_kpi(data, t):
-        mask_day = data['날짜'] == t
-        mask_mtd = (data['날짜'] <= t) & (data['날짜'].dt.month == t.month) & (data['날짜'].dt.year == t.year)
-        mask_ytd = (data['날짜'] <= t) & (data['날짜'].dt.year == t.year)
+    # 1. KPI 계산 함수 (문자열 비교로 변경)
+    def calc_kpi(data, t_str, t_obj):
+        # 일간: 문자열로 정확히 비교
+        mask_day = data['날짜_str'] == t_str
+        
+        # 누적: 날짜 객체로 비교
+        mask_mtd = (data['날짜'] <= t_obj) & (data['날짜'].dt.month == t_obj.month) & (data['날짜'].dt.year == t_obj.year)
+        mask_ytd = (data['날짜'] <= t_obj) & (data['날짜'].dt.year == t_obj.year)
         
         res = {}
         for label, mask in zip(['Day', 'MTD', 'YTD'], [mask_day, mask_mtd, mask_ytd]):
@@ -226,18 +232,17 @@ def run_tab1_management():
         return res
 
     # 2. KPI 산출
-    metrics = calc_kpi(df, target_date)
+    metrics = calc_kpi(df, target_date_str, target_date_obj)
     current_val_gj = metrics['Day']['gj']['a'] # 현재 화면에 표시될 일간 실적
 
-    # 3. [중요] 랭킹 실시간 계산
-    # 사용자가 데이터를 수정하면 df가 업데이트되고 -> 페이지 리런 -> 여기 도달 -> 업데이트된 값으로 랭킹 계산
+    # 3. 랭킹 계산 (실적값이 있을 때만)
     rank_text = ""
     if current_val_gj > 0:
-        rank_info = get_historical_ranks(current_val_gj, target_date)
+        rank_info = get_historical_ranks(current_val_gj, target_date_obj)
         if rank_info:
             rank_text = rank_info
 
-    # 4. 화면 표시 (Metrics)
+    # 4. 화면 표시
     st.markdown("### 🔥 열량 실적 (GJ)")
     col_g1, col_g2, col_g3 = st.columns(3)
     
@@ -246,7 +251,6 @@ def run_tab1_management():
         st.metric(label=f"일간 달성률 {m['rate']:.1f}%", value=f"{int(m['a']):,} GJ", delta=f"{int(m['diff']):+,} GJ")
         st.caption(f"계획: {int(m['p']):,} GJ")
         
-        # 랭킹 표시 (값이 있을 때만)
         if rank_text:
             st.info(rank_text)
 
@@ -276,12 +280,12 @@ def run_tab1_management():
         st.caption(f"누적 계획: {int(m['p']):,}")
 
     st.markdown("---")
-    st.subheader(f"📝 {target_date.month}월 실적 입력")
+    st.subheader(f"📝 {target_date_obj.month}월 실적 입력")
     st.info("💡 값을 수정하고 엔터(Enter)를 치면 상단 그래프와 랭킹이 즉시 업데이트됩니다.")
 
-    mask_month = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
+    # 날짜 필터링 (문자열 비교 대신 여기서는 날짜 객체 활용하되, 안전하게 년/월 매칭)
+    mask_month = (df['날짜'].dt.year == target_date_obj.year) & (df['날짜'].dt.month == target_date_obj.month)
 
-    # 5. 데이터 입력 에디터
     st.markdown("##### 1️⃣ 열량(GJ) 입력")
     view_gj = df.loc[mask_month, ['날짜', '계획(GJ)', '실적(GJ)']].copy()
     edited_gj = st.data_editor(
@@ -294,13 +298,9 @@ def run_tab1_management():
         hide_index=True, use_container_width=True, key="editor_gj"
     )
     
-    # [데이터 수정 감지 로직]
     if not edited_gj.equals(view_gj):
-        # 1. 수정된 데이터프레임으로 원본 업데이트
         df.update(edited_gj)
-        # 2. 세션 상태 업데이트 (가장 중요)
         st.session_state.data_tab1 = df
-        # 3. 페이지 리런 -> 위쪽의 calc_kpi와 get_historical_ranks가 갱신된 값으로 다시 실행됨
         st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -331,7 +331,7 @@ def run_tab1_management():
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df.to_excel(writer, sheet_name='연간', index=False)
-    st.download_button(label="💾 관리 데이터 엑셀 저장", data=buffer, file_name=f"실적데이터_{target_date.strftime('%Y%m%d')}.xlsx", mime="application/vnd.ms-excel")
+    st.download_button(label="💾 관리 데이터 엑셀 저장", data=buffer, file_name=f"실적데이터_{target_date_obj.strftime('%Y%m%d')}.xlsx", mime="application/vnd.ms-excel")
 
 
 # ==============================================================================
@@ -514,7 +514,7 @@ def run_tab2_analysis():
                 plan_curve_x = plan_month['날짜'].dt.day.tolist()
                 plan_curve_y = plan_month['plan_gj'].tolist()
         
-        # [수정 확인] '(최근 3년 + 계획)' 문구 삭제됨
+        # 차트 제목
         st.markdown(f"### 📈 {sel_month}월 일별 패턴 비교")
         cand_years = sorted(df_all["연"].unique().tolist())
         past_candidates = [y for y in cand_years if y < sel_year]
@@ -615,20 +615,6 @@ def run_tab2_analysis():
                     _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
             
             st.dataframe(center_style(rank_df[["Rank", "공급량_GJ", "연", "월", "일", "평균기온(℃)"]].style.format({"공급량_GJ": "{:,.1f}", "평균기온(℃)": "{:,.1f}"})), use_container_width=True, hide_index=True)
-
-            st.markdown("---")
-            st.markdown("#### 🏆 전체 기간 Top 랭킹")
-            global_top = df_all.sort_values(act_col, ascending=False).head(top_n).copy()
-            global_top["공급량_GJ"] = global_top[act_col] / 1000.0
-            global_top.insert(0, "Rank", range(1, len(global_top) + 1))
-            g_top3 = global_top.head(3)
-            gc1, gc2, gc3 = st.columns(3)
-            gcols = [gc1, gc2, gc3]
-            for i, (_, row) in enumerate(g_top3.iterrows()):
-                with gcols[i]: 
-                    _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
-                    
-            st.dataframe(center_style(global_top[["Rank", "공급량_GJ", "연", "월", "일", "평균기온(℃)"]].style.format({"공급량_GJ": "{:,.1f}", "평균기온(℃)": "{:,.1f}"})), use_container_width=True, hide_index=True)
 
             # 3차 다항식
             st.markdown("#### 🌡️ 기온별 공급량 변화 (3차 다항식)")
