@@ -26,7 +26,7 @@ set_korean_font()
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (입력형 - 랭킹 표시 삭제됨)
+# [탭 1] 도시가스 공급실적 관리 (랭킹 기능 복구 완료)
 # ==============================================================================
 def run_tab1_management():
     # --- 내부 함수 ---
@@ -144,7 +144,17 @@ def run_tab1_management():
 
     metrics = calc_kpi(df, target_date)
 
-    # [미미] 랭킹 표시 삭제 완료 (형님 요청)
+    # [수정] Han형님 요청으로 랭킹 기능 부활 (금년도 기준)
+    # 현재 조회일자의 실적(GJ) 가져오기
+    current_val = metrics['Day']['gj']['a']
+    rank_text = ""
+    if current_val > 0:
+        # 0보다 큰 실적들 중에서 순위 계산 (내림차순)
+        valid_df = df[df['실적(GJ)'] > 0]
+        rank = valid_df[valid_df['실적(GJ)'] > current_val].shape[0] + 1
+        total_days = len(valid_df)
+        rank_text = f"🏆 금년 실적 {rank}위 (총 {total_days}일 중)"
+
     st.markdown("### 🔥 열량 실적 (GJ)")
     col_g1, col_g2, col_g3 = st.columns(3)
     
@@ -152,6 +162,8 @@ def run_tab1_management():
         m = metrics['Day']['gj']
         st.metric(label=f"일간 달성률 {m['rate']:.1f}%", value=f"{int(m['a']):,} GJ", delta=f"{int(m['diff']):+,} GJ")
         st.caption(f"계획: {int(m['p']):,} GJ")
+        if rank_text:
+            st.info(rank_text) # 랭킹 표시 부활
 
     with col_g2:
         m = metrics['MTD']['gj']
@@ -231,7 +243,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (미미's Graph Logic Update)
+# [탭 2] 공급량 분석 (수정사항 반영됨)
 # ==============================================================================
 def run_tab2_analysis():
     # --- 분석용 헬퍼 함수 ---
@@ -252,7 +264,7 @@ def run_tab2_analysis():
         return (xls.parse("월별계획_실적") if "월별계획_실적" in xls.sheet_names else pd.DataFrame(),
                 xls.parse("일별실적") if "일별실적" in xls.sheet_names else pd.DataFrame())
     
-    # [미미] 2026년 일별 계획을 읽기 위한 전용 로더 (Tab 1 파일과 동일)
+    # [미미] 2026년 일별 계획을 읽기 위한 전용 로더
     def load_2026_plan_file():
         try:
             path = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
@@ -328,7 +340,8 @@ def run_tab2_analysis():
         st.markdown(f"<div style='margin-top:-4px;font-size:13px;color:#666;'>선택 기준: <b>{sel_year}년 {sel_month}월</b></div>", unsafe_allow_html=True)
         return sel_year, sel_month, years_all
 
-    def _render_supply_top_card(rank, row, icon, gradient, rank_all, rank_month):
+    # [수정] Han형님 요청으로 하단 랭킹 텍스트 삭제
+    def _render_supply_top_card(rank, row, icon, gradient):
         date_str = f"{int(row['연'])}년 {int(row['월'])}월 {int(row['일'])}일"
         supply_str = f"{row['공급량_GJ']:,.1f} GJ"
         temp_str = f"{row['평균기온(℃)']:.1f}℃" if not pd.isna(row["평균기온(℃)"]) else "-"
@@ -338,10 +351,6 @@ def run_tab2_analysis():
         <div style="font-size:14px;margin-bottom:3px;">📅 <b>{date_str}</b></div>
         <div style="font-size:14px;margin-bottom:3px;">🔥 공급량: <b>{supply_str}</b></div>
         <div style="font-size:14px;margin-bottom:6px;">🌡 평균기온: <b>{temp_str}</b></div>
-        <div style="background:rgba(255,255,255,0.6);border-radius:8px;padding:6px 10px;font-size:13px;">
-            <div style="color:#333;">🏆 역대 전체: <b>{rank_all}위</b></div>
-            <div style="color:#333;">📅 역대 동월: <b>{rank_month}위</b></div>
-        </div>
         </div>"""
         st.markdown(html, unsafe_allow_html=True)
 
@@ -401,11 +410,6 @@ def run_tab2_analysis():
         act_col = "공급량(MJ)"
         if act_col not in day_df.columns: return
         
-        # 2. 월 계획값 (편차 계산용)
-        # 2026년 파일에서 읽어온 실제 일별 계획을 사용할 것이므로, 월평균은 참고용으로만 계산
-        # (혹시 2026 파일이 로드 안될 경우를 대비)
-        daily_plan_gj_flat = 0 
-        
         # 데이터 정리
         df_all = day_df.copy()
         df_all["연"] = df_all["일자"].dt.year
@@ -430,15 +434,14 @@ def run_tab2_analysis():
         cand_years = sorted(df_all["연"].unique().tolist())
         past_candidates = [y for y in cand_years if y < sel_year]
         
-        # [미미] 최근 3년 실적 기본 선택
-        recent_3_years = [y for y in [2023, 2024, 2025] if y in past_candidates]
-        default_years = recent_3_years if recent_3_years else past_candidates[-3:]
+        # [수정] 기본적으로 최근 2개년만 보여주기 (Han형님 요청)
+        default_years = past_candidates[-2:] if len(past_candidates) >= 2 else past_candidates
         
         past_years = st.multiselect("과거 연도 선택", options=past_candidates, default=default_years, key=f"{key_prefix}past_years")
         
         fig1 = go.Figure()
         
-        # (1) [미미] 2026년 실제 계획 (붉은색 점선) - 2번째 파일에서 가져옴!
+        # (1) 2026년 실제 계획 (붉은색 점선)
         if plan_curve_x:
             fig1.add_scatter(
                 x=plan_curve_x, 
@@ -447,24 +450,33 @@ def run_tab2_analysis():
                 name=f"{sel_year}년 {sel_month}월 계획 (사업계획)", 
                 line=dict(color="#FF4B4B", width=3, dash="dot")
             )
-        else:
-            st.warning("⚠️ 2026년 일별 계획 파일을 찾을 수 없어 계획선이 표시되지 않습니다.")
 
-        # (2) 과거 연도 실적 (파스텔톤 실선)
-        # Pastel Colors inspired by Plotly Pastel
+        # (2) 과거 연도 실적 (수정: 직전 연도는 진하게, 그 외는 파스텔톤)
         pastel_colors = ["#93C5FD", "#A5B4FC", "#C4B5FD", "#FDA4AF", "#FCA5A5", "#FCD34D", "#86EFAC"]
+        prev_year = sel_year - 1
+
         for idx, y in enumerate(past_years):
             sub = df_all[(df_all["연"] == y) & (df_all["월"] == sel_month)].copy()
             if sub.empty: continue
-            color = pastel_colors[idx % len(pastel_colors)]
+            
+            # [수정] 스타일 로직
+            if y == prev_year:
+                line_color = "#3B82F6"  # 진한 파란색
+                line_width = 3
+                op_mode = "lines+markers"
+            else:
+                line_color = pastel_colors[idx % len(pastel_colors)]
+                line_width = 1.5
+                op_mode = "lines"
+
             fig1.add_scatter(
                 x=sub["일"], y=sub[act_col] / 1000.0, 
-                mode="lines+markers", 
+                mode=op_mode, 
                 name=f"{y}년 {sel_month}월 실적", 
-                line=dict(color=color, width=2)
+                line=dict(color=line_color, width=line_width)
             )
             
-        # (3) 당년도(2026) 실적 (진한 검정 실선)
+        # (3) 당년도 실적 (진한 검정 실선)
         if not this_df.empty: 
             fig1.add_scatter(
                 x=this_df["일"], y=this_df[act_col] / 1000.0, 
@@ -481,10 +493,9 @@ def run_tab2_analysis():
         )
         st.plotly_chart(fig1, use_container_width=True)
 
-        # 4. 편차 그래프 (계획이 있을 때만)
+        # 4. 편차 그래프
         if not this_df.empty and plan_curve_x:
             st.markdown("### 🧮 일일계획 대비 편차")
-            # 데이터프레임 병합하여 편차 계산
             plan_sub = pd.DataFrame({'일': plan_curve_x, 'plan_gj': plan_curve_y})
             merged = pd.merge(this_df, plan_sub, on='일', how='left')
             merged['편차_GJ'] = (merged[act_col] / 1000.0) - merged['plan_gj']
@@ -499,7 +510,7 @@ def run_tab2_analysis():
             show["일별실적(GJ)"] = show["일별실적(GJ)"].apply(lambda v: v / 1000.0)
             st.dataframe(center_style(show.style.format("{:,.1f}", subset=["일별실적(GJ)", "편차(GJ)"])), use_container_width=True, hide_index=True)
 
-        # 5. Top 랭킹 (Han형님 요청: 역대/동월 랭킹 & 1위 폭죽)
+        # 5. Top 랭킹
         st.markdown("---")
         st.markdown("### 💎 일별 공급량 Top 랭킹")
         month_all = df_all[df_all["월"] == sel_month].copy()
@@ -517,14 +528,8 @@ def run_tab2_analysis():
             icons, grads = ["🥇", "🥈", "🥉"], ["linear-gradient(120deg,#eff6ff,#fef9c3)", "linear-gradient(120deg,#f9fafb,#e5e7eb)", "linear-gradient(120deg,#fff7ed,#fef9c3)"]
             
             for i, (_, row) in enumerate(top3.iterrows()):
-                val = row[act_col]
-                # 랭킹 계산
-                rank_all = df_all[df_all[act_col] > val].shape[0] + 1
-                same_month_df = df_all[df_all['월'] == row['월']]
-                rank_month = same_month_df[same_month_df[act_col] > val].shape[0] + 1
-                
                 with cols[i]: 
-                    _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i], rank_all, rank_month)
+                    _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
             
             st.dataframe(center_style(rank_df[["Rank", "공급량_GJ", "연", "월", "일", "평균기온(℃)"]].style.format({"공급량_GJ": "{:,.1f}", "평균기온(℃)": "{:,.1f}"})), use_container_width=True, hide_index=True)
 
@@ -537,23 +542,27 @@ def run_tab2_analysis():
             gc1, gc2, gc3 = st.columns(3)
             gcols = [gc1, gc2, gc3]
             for i, (_, row) in enumerate(g_top3.iterrows()):
-                val = row[act_col]
-                rank_all = df_all[df_all[act_col] > val].shape[0] + 1
-                same_month_df = df_all[df_all['월'] == row['월']]
-                rank_month = same_month_df[same_month_df[act_col] > val].shape[0] + 1
                 with gcols[i]: 
-                    _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i], rank_all, rank_month)
+                    _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
                     
             st.dataframe(center_style(global_top[["Rank", "공급량_GJ", "연", "월", "일", "평균기온(℃)"]].style.format({"공급량_GJ": "{:,.1f}", "평균기온(℃)": "{:,.1f}"})), use_container_width=True, hide_index=True)
 
+            # [수정] 3차 다항식 오류 수정 (0 이하 값 제외 및 이상치 처리)
             st.markdown("#### 🌡️ 기온별 공급량 변화 (3차 다항식)")
             temp_supply = month_all.dropna(subset=["평균기온(℃)", act_col]).copy()
+            
+            # [Fix] 공급량이 100 이상인 유효한 데이터만 사용 (0값 오류 방지)
+            temp_supply = temp_supply[temp_supply[act_col] > 100]
+
             if len(temp_supply) > 4:
                 x = temp_supply["평균기온(℃)"].values
                 y = temp_supply[act_col].values / 1000.0
+                
+                # 다항 회귀 적합
                 coeffs = np.polyfit(x, y, 3)
                 p = np.poly1d(coeffs)
                 xs = np.linspace(x.min() - 1, x.max() + 1, 150)
+                
                 fig3 = go.Figure()
                 fig3.add_scatter(x=x, y=y, mode="markers", name="일별 데이터", marker=dict(size=7, opacity=0.7))
                 fig3.add_scatter(x=xs, y=p(xs), mode="lines", name="3차 다항 회귀", line=dict(color="#FF4B4B", width=2))
@@ -600,12 +609,9 @@ def run_tab2_analysis():
             long_dummy["값"] = pd.to_numeric(month_df[act_col], errors="coerce")
             long_dummy = long_dummy.dropna(subset=["값"])
             
-            # Han형님 요청: 계획기준 선택 삭제 -> 자동으로 찾아서 넘김
             sel_year, sel_month, years_all = render_section_selector_daily(long_dummy, "공급량(일) 기준 선택", "supplyD_base_")
             st.markdown("---")
             
-            # dummy 인자 전달 (plan_choice, plan_label은 이제 함수 안에서 자동 처리하지만, 함수 시그니처 유지를 위해 None 전달해도 됨. 
-            # 하지만 안전하게 내부에서 무시하도록 로직 수정함)
             supply_daily_main_logic(day_df, month_df, sel_year, sel_month, key_prefix="supplyD_")
     else:
         st.info("👈 좌측 사이드바에서 '공급량(계획_실적).xlsx' 파일을 업로드해주세요.")
