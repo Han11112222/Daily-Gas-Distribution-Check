@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # ─────────────────────────────────────────────────────────
-# [0] 페이지 기본 설정
+# [0] 페이지 기본 설정 (무조건 맨 윗줄)
 # ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="도시가스 통합 관리 시스템", layout="wide")
 
@@ -26,7 +26,7 @@ set_korean_font()
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (입력형)
+# [탭 1] 도시가스 공급실적 관리 (입력형 - 기존 유지)
 # ==============================================================================
 def run_tab1_management():
     # --- 내부 함수 ---
@@ -228,10 +228,10 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (Han형님 요청: 오직 '일별 분석'만 표출)
+# [탭 2] 공급량 분석 (Han형님 요청: 일별 분석 전용 + 2026 계획)
 # ==============================================================================
 def run_tab2_analysis():
-    # --- 분석용 설정 및 헬퍼 함수 ---
+    # --- 분석용 헬퍼 함수 ---
     COLOR_PLAN = "rgba(0, 90, 200, 1)"
     COLOR_ACT = "rgba(0, 150, 255, 1)"
     COLOR_DIFF = "rgba(0, 80, 160, 1)"
@@ -241,8 +241,11 @@ def run_tab2_analysis():
         styler = styler.set_table_styles([dict(selector="th", props=[("text-align", "center")])])
         return styler
 
-    def pick_default_year(years: List[int]) -> int:
-        return 2025 if 2025 in years else years[-1]
+    def pick_default_year_2026(years: List[int]) -> int:
+        # Han형님 요청: 2026년이 있으면 2026년 우선, 없으면 2025년
+        if 2026 in years: return 2026
+        if 2025 in years: return 2025
+        return years[-1]
 
     def load_supply_sheets(excel_bytes):
         xls = pd.ExcelFile(io.BytesIO(excel_bytes), engine="openpyxl")
@@ -255,7 +258,10 @@ def run_tab2_analysis():
         if "Unnamed: 0" in df.columns: df = df.drop(columns=["Unnamed: 0"])
         df["연"] = pd.to_numeric(df["연"], errors="coerce").astype("Int64")
         df["월"] = pd.to_numeric(df["월"], errors="coerce").astype("Int64")
-        for c in [c for c in df.columns if c not in ["연", "월"]]: df[c] = pd.to_numeric(df[c], errors="coerce")
+        # 컬럼 이름에 '계획', '실적' 등이 들어간 숫자 데이터 처리
+        num_cols = [c for c in df.columns if c not in ["연", "월"]]
+        for c in num_cols: 
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
         df = df.dropna(subset=["연", "월"])
         df["연"] = df["연"].astype(int)
         df["월"] = df["월"].astype(int)
@@ -266,7 +272,7 @@ def run_tab2_analysis():
         df = df.copy()
         df["일자"] = pd.to_datetime(df["일자"], errors="coerce")
         for c in ["공급량(MJ)", "공급량(M3)", "평균기온(℃)"]:
-            if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce")
+            if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
         df = df.dropna(subset=["일자"])
         return df
 
@@ -276,11 +282,18 @@ def run_tab2_analysis():
             st.info("데이터가 없습니다.")
             return 0, 1, []
         years_all = sorted(long_df["연"].unique().tolist())
-        default_year = pick_default_year(years_all)
+        # 기본값 2026년으로 설정
+        default_year = pick_default_year_2026(years_all)
+        
         c1, c2, c3 = st.columns([1.2, 1.2, 1.6])
-        with c1: sel_year = st.selectbox("기준 연도", years_all, index=years_all.index(default_year), key=f"{key_prefix}year")
-        with c2: sel_month = st.selectbox("기준 월", list(range(1, 13)), index=9, key=f"{key_prefix}month") # 10월 기본
-        with c3: st.markdown(f"<div style='padding-top:28px;font-size:14px;color:#666;'>집계 기준: <b>당월(일별)</b></div>", unsafe_allow_html=True)
+        with c1: 
+            sel_year = st.selectbox("기준 연도", years_all, index=years_all.index(default_year), key=f"{key_prefix}year")
+        with c2: 
+            # 1~12월 선택 (기본 1월)
+            sel_month = st.selectbox("기준 월", list(range(1, 13)), index=0, key=f"{key_prefix}month") 
+        with c3: 
+            st.markdown(f"<div style='padding-top:28px;font-size:14px;color:#666;'>집계 기준: <b>당월(일별)</b></div>", unsafe_allow_html=True)
+        
         st.markdown(f"<div style='margin-top:-4px;font-size:13px;color:#666;'>선택 기준: <b>{sel_year}년 {sel_month}월</b></div>", unsafe_allow_html=True)
         return sel_year, sel_month, years_all
 
@@ -303,6 +316,7 @@ def run_tab2_analysis():
         day_df["월"] = day_df["일자"].dt.month
         day_df["일"] = day_df["일자"].dt.day
         years = sorted(day_df["연"].unique().tolist())
+        if not years: return
         min_y, max_y = years[0], years[-1]
         c1, c2 = st.columns([2, 1.2])
         with c1: yr_range = st.slider("연도 범위", min_value=min_y, max_value=max_y, value=(min_y, max_y), step=1, key=f"{key_prefix}yr_range")
@@ -326,6 +340,7 @@ def run_tab2_analysis():
         df["연"] = df["일자"].dt.year
         df["월"] = df["일자"].dt.month
         years = sorted(df["연"].unique().tolist())
+        if not years: return
         min_y, max_y = years[0], years[-1]
         c1, c2 = st.columns([2, 1.2])
         with c1: yr_range = st.slider("연도 범위(공급량 분석)", min_value=min_y, max_value=max_y, value=(max(min_y, max_y - 4), max_y), step=1, key=f"{key_prefix}yr_range")
@@ -343,26 +358,47 @@ def run_tab2_analysis():
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(center_style(grp.rename(columns={"평균공급량_GJ": "평균공급량(GJ)"}).style.format({"평균공급량(GJ)": "{:,.1f}"})), use_container_width=True, hide_index=True)
 
-    def supply_daily_main_logic(day_df, month_df, sel_year, sel_month, plan_choice, plan_label, key_prefix):
+    def supply_daily_main_logic(day_df, month_df, sel_year, sel_month, key_prefix):
         st.markdown("## 📅 공급량 분석(일)")
         if day_df.empty or month_df.empty: return
         act_col = "공급량(MJ)"
         if act_col not in day_df.columns: return
+        
+        # 1. 계획 컬럼 자동 찾기 (사업계획 우선)
+        plan_cols = [c for c in month_df.columns if "계획" in c and "MJ" in c]
+        if not plan_cols:
+            st.warning("월별 계획(MJ) 컬럼을 찾을 수 없습니다.")
+            return
+        
+        # 사업계획이 포함된 컬럼 우선 선택, 없으면 첫 번째 것
+        biz_plan_cols = [c for c in plan_cols if "사업계획" in c]
+        target_plan_col = biz_plan_cols[0] if biz_plan_cols else plan_cols[0]
+        
+        # 2. 월 계획값 및 일일 계획량 계산
+        mrow = month_df[(month_df["연"] == sel_year) & (month_df["월"] == sel_month)]
+        
+        # 2026년 데이터가 없어도 계획은 그릴 수 있도록 처리 (값이 없으면 0)
+        if mrow.empty:
+            month_plan_mj = 0
+        else:
+            month_plan_mj = float(mrow.iloc[0][target_plan_col])
+            
+        try:
+            days_in_month = int(pd.Timestamp(sel_year, sel_month, 1).days_in_month)
+        except:
+            days_in_month = 30 # 에러 방지용 기본값
+            
+        daily_plan_mj = month_plan_mj / days_in_month
+        daily_plan_gj = daily_plan_mj / 1000.0
+
+        # 데이터 정리
         df_all = day_df.copy()
         df_all["연"] = df_all["일자"].dt.year
         df_all["월"] = df_all["일자"].dt.month
         df_all["일"] = df_all["일자"].dt.day
-        mrow = month_df[(month_df["연"] == sel_year) & (month_df["월"] == sel_month)]
-        if mrow.empty: 
-            st.info("선택월 월별계획 데이터가 없어.")
-            return
-        month_plan_mj = float(mrow.iloc[0][plan_choice])
-        days_in_month = int(pd.Timestamp(sel_year, sel_month, 1).days_in_month)
-        daily_plan_mj = month_plan_mj / days_in_month
-        daily_plan_gj = daily_plan_mj / 1000.0
         this_df = df_all[(df_all["연"] == sel_year) & (df_all["월"] == sel_month)].copy()
         
-        # 1. 패턴 비교
+        # 3. 차트 그리기
         st.markdown("### 📈 일별 패턴 비교(당년도 vs 과거동월)")
         cand_years = sorted(df_all["연"].unique().tolist())
         past_candidates = [y for y in cand_years if y < sel_year]
@@ -371,16 +407,46 @@ def run_tab2_analysis():
         past_years = st.multiselect("과거 연도 선택", options=past_recent_10, default=default_past, key=f"{key_prefix}past_years")
         
         fig1 = go.Figure()
-        if not this_df.empty: fig1.add_scatter(x=this_df["일"], y=this_df[act_col] / 1000.0, mode="lines+markers", name=f"{sel_year}년 {sel_month}월 실적", line=dict(color=COLOR_ACT, width=3))
+        
+        # (1) 당년도 실적 (데이터가 있을 때만)
+        if not this_df.empty: 
+            fig1.add_scatter(
+                x=this_df["일"], y=this_df[act_col] / 1000.0, 
+                mode="lines+markers", 
+                name=f"{sel_year}년 {sel_month}월 실적", 
+                line=dict(color=COLOR_ACT, width=3)
+            )
+            
+        # (2) 과거 연도 실적
         for y in past_years:
             sub = df_all[(df_all["연"] == y) & (df_all["월"] == sel_month)].copy()
             if sub.empty: continue
-            fig1.add_scatter(x=sub["일"], y=sub[act_col] / 1000.0, mode="lines+markers", name=f"{y}년 {sel_month}월 실적", line=dict(width=1.5, dash="dot"))
-        fig1.add_scatter(x=list(range(1, days_in_month + 1)), y=[daily_plan_gj] * days_in_month, mode="lines", name=f"일일계획량({plan_label})", line=dict(color=COLOR_PLAN, width=3, dash="dot"))
-        fig1.update_layout(title=f"{sel_year}년 {sel_month}월 일별 공급량 패턴", xaxis_title="일", yaxis_title="공급량 (GJ)", margin=dict(l=10, r=10, t=50, b=10))
+            fig1.add_scatter(
+                x=sub["일"], y=sub[act_col] / 1000.0, 
+                mode="lines+markers", 
+                name=f"{y}년 {sel_month}월 실적", 
+                line=dict(width=1.5, dash="dot")
+            )
+            
+        # (3) [Han형님 요청] 선택 연도 일일 계획량 (점선)
+        # 데이터가 없어도 계획선은 그립니다.
+        fig1.add_scatter(
+            x=list(range(1, days_in_month + 1)), 
+            y=[daily_plan_gj] * days_in_month, 
+            mode="lines", 
+            name=f"{sel_year}년 {sel_month}월 계획(사업계획)", 
+            line=dict(color=COLOR_PLAN, width=3, dash="dot")
+        )
+        
+        fig1.update_layout(
+            title=f"{sel_year}년 {sel_month}월 일별 공급량 패턴", 
+            xaxis_title="일", 
+            yaxis_title="공급량 (GJ)", 
+            margin=dict(l=10, r=10, t=50, b=10)
+        )
         st.plotly_chart(fig1, use_container_width=True)
 
-        # 2. 편차
+        # 4. 편차 그래프 (실적이 있을 때만)
         if not this_df.empty:
             st.markdown("### 🧮 일일계획 대비 편차 (당년도)")
             this_df["편차_GJ"] = (this_df[act_col] - daily_plan_mj) / 1000.0
@@ -388,18 +454,21 @@ def run_tab2_analysis():
             fig2.add_bar(x=this_df["일"], y=this_df["편차_GJ"], name="편차", marker_color=COLOR_DIFF)
             fig2.update_layout(title=f"{sel_year}년 {sel_month}월 편차(실적-일계획)", xaxis_title="일", yaxis_title="편차 (GJ)", margin=dict(l=10, r=10, t=40, b=10))
             st.plotly_chart(fig2, use_container_width=True)
+            
             show = this_df[["일자", act_col, "편차_GJ"]].copy()
             show.columns = ["일자", "일별실적(GJ)", "편차(GJ)"]
             show["일별실적(GJ)"] = show["일별실적(GJ)"].apply(lambda v: v / 1000.0)
             st.dataframe(center_style(show.style.format("{:,.1f}", subset=["일별실적(GJ)", "편차(GJ)"])), use_container_width=True, hide_index=True)
 
-        # 3. Top 랭킹
+        # 5. Top 랭킹
         st.markdown("---")
         st.markdown("### 💎 일별 공급량 Top 랭킹")
         month_all = df_all[df_all["월"] == sel_month].copy()
         if not month_all.empty:
             top_n = st.slider("표시할 순위 개수", 5, 50, 10, 5, key=f"{key_prefix}top_n")
-            st.markdown("#### 📅 선택월 기준 Top 랭킹")
+            
+            # [Han형님 요청] **월 표기
+            st.markdown(f"#### 📅 {sel_month}월 기준 Top 랭킹")
             month_all["공급량_GJ"] = month_all[act_col] / 1000.0
             rank_df = month_all.sort_values("공급량_GJ", ascending=False).head(top_n).copy()
             rank_df.insert(0, "Rank", range(1, len(rank_df) + 1))
@@ -434,7 +503,7 @@ def run_tab2_analysis():
                 fig3 = go.Figure()
                 fig3.add_scatter(x=x, y=y, mode="markers", name="일별 데이터", marker=dict(size=7, opacity=0.7))
                 fig3.add_scatter(x=xs, y=p(xs), mode="lines", name="3차 다항 회귀", line=dict(color=COLOR_DIFF, width=2))
-                fig3.update_layout(title=f"{sel_month}월 기온별 공급량", xaxis_title="기온(℃)", yaxis_title="공급량(GJ)", margin=dict(l=10, r=10, t=40, b=10))
+                fig3.update_layout(title=f"{sel_month}월 기온별 공급량", xaxis_title="기온(℃)", yaxis_title="공급량 (GJ)", margin=dict(l=10, r=10, t=40, b=10))
                 st.plotly_chart(fig3, use_container_width=True)
 
         st.markdown("---")
@@ -471,10 +540,6 @@ def run_tab2_analysis():
         if month_df.empty or day_df.empty:
             st.error("엑셀 파일에 '월별계획_실적' 또는 '일별실적' 시트가 비어있거나 없습니다.")
         else:
-            plan_cols = [c for c in month_df.columns if c.startswith("계획(")]
-            plan_choice = st.radio("계획 기준 선택", options=plan_cols, index=0, horizontal=True, key="supplyD_plan")
-            plan_label = "사업계획" if "사업계획" in plan_choice else "마케팅팀계획"
-            
             act_col = "실적_공급량(MJ)"
             long_dummy = month_df[["연", "월"]].copy()
             long_dummy["계획/실적"] = "실적"
@@ -483,7 +548,10 @@ def run_tab2_analysis():
             
             sel_year, sel_month, years_all = render_section_selector_daily(long_dummy, "공급량(일) 기준 선택", "supplyD_base_")
             st.markdown("---")
-            supply_daily_main_logic(day_df, month_df, sel_year, sel_month, plan_choice, plan_label, key_prefix="supplyD_")
+            # plan_choice, plan_label 자동 처리되므로 인자는 None으로 넘기거나 함수 내부에서 처리
+            # 여기서는 함수 내부에서 자동으로 사업계획을 찾도록 변경했으므로, 
+            # 호출 시 인자를 맞춰줍니다. (dummy 인자 전달)
+            supply_daily_main_logic(day_df, month_df, sel_year, sel_month, key_prefix="supplyD_")
     else:
         st.info("👈 좌측 사이드바에서 '공급량(계획_실적).xlsx' 파일을 업로드해주세요.")
 
