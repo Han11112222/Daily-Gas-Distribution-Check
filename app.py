@@ -26,7 +26,7 @@ set_korean_font()
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (랭킹 오류 수정 완료)
+# [탭 1] 도시가스 공급실적 관리 (랭킹 로직 강화)
 # ==============================================================================
 def run_tab1_management():
     # --- 내부 함수 ---
@@ -81,43 +81,79 @@ def run_tab1_management():
 
         return df, None
 
-    # [랭킹용] 과거 데이터 로드 및 비교 함수 (수정됨: 순수 일별 데이터만 필터링)
+    # [랭킹용] 과거 데이터 로드 (스마트 컬럼 찾기 적용)
     def get_historical_ranks(current_val, target_date):
         history_file = Path(__file__).parent / "공급량(계획_실적).xlsx"
+        
+        # 파일이 없으면 계산 불가
         if not history_file.exists():
             return None 
 
         try:
             xls = pd.ExcelFile(history_file, engine="openpyxl")
             sheet_name = "월별계획_실적" if "월별계획_실적" in xls.sheet_names else xls.sheet_names[0]
-            df_hist = pd.read_excel(xls, sheet_name=sheet_name)
             
-            act_col = "실적_공급량(MJ)"
-            if act_col not in df_hist.columns: return None
+            # 헤더 위치 찾기 (Header가 첫 줄이 아닐 수도 있음)
+            raw = pd.read_excel(xls, sheet_name=sheet_name, header=None)
+            header_idx = None
+            for i, row in raw.iterrows():
+                row_str = row.astype(str).values
+                # '연' 또는 '년', '월', '실적' 같은 키워드가 있는지 확인
+                if any('연' in s for s in row_str) and any('월' in s for s in row_str):
+                    header_idx = i
+                    break
+            
+            if header_idx is None:
+                # 헤더를 못 찾으면 그냥 첫 줄을 헤더로 가정
+                df_hist = pd.read_excel(xls, sheet_name=sheet_name)
+            else:
+                df_hist = raw.iloc[header_idx+1:].copy()
+                df_hist.columns = raw.iloc[header_idx].astype(str).str.replace(r'\s+', '', regex=True).tolist()
 
-            # [중요 수정] 연, 월, 일이 모두 숫자로 존재하는 행만 남김 (합계/소계 행 제거)
-            df_hist = df_hist.dropna(subset=[act_col, '연', '월', '일'])
-            df_hist['일'] = pd.to_numeric(df_hist['일'], errors='coerce')
-            df_hist = df_hist.dropna(subset=['일']) # '일'이 숫자가 아니면 제거
+            # 컬럼 매핑 (유연하게)
+            col_act = None
+            col_month = None
+            col_day = None
 
-            # 단위 변환 (MJ -> GJ)
-            hist_vals = df_hist[act_col] / 1000.0 
+            for c in df_hist.columns:
+                if '실적' in c and ('GJ' in c or 'MJ' in c): col_act = c
+                if '월' in c: col_month = c
+                if '일' in c: col_day = c
+            
+            # 필수 컬럼이 없으면 리턴
+            if col_act is None: return None
+
+            # 데이터 전처리
+            # 1. 값이 있는 행만
+            df_hist = df_hist.dropna(subset=[col_act])
+            
+            # 2. '일' 정보가 없거나 숫자가 아니면(합계 행 등) 제거
+            if col_day:
+                df_hist[col_day] = pd.to_numeric(df_hist[col_day], errors='coerce')
+                df_hist = df_hist.dropna(subset=[col_day]) # 일이 숫자인 행만 남김 (월계/누계 제거 효과)
+
+            # 3. 단위 변환 (MJ이면 GJ로)
+            vals = pd.to_numeric(df_hist[col_act], errors='coerce').fillna(0)
+            if 'MJ' in col_act:
+                vals = vals / 1000.0
             
             # (1) 역대 전체 랭킹
-            rank_all = (hist_vals > current_val).sum() + 1
+            rank_all = (vals > current_val).sum() + 1
             
             # (2) 역대 동월 랭킹
-            if '월' in df_hist.columns:
-                df_hist['월'] = pd.to_numeric(df_hist['월'], errors='coerce')
-                month_vals = df_hist[df_hist['월'] == target_date.month][act_col] / 1000.0
+            rank_month = "-"
+            if col_month:
+                df_hist[col_month] = pd.to_numeric(df_hist[col_month], errors='coerce')
+                # 해당 월 데이터만 필터링
+                month_mask = df_hist[col_month] == target_date.month
+                month_vals = vals[month_mask]
                 rank_month = (month_vals > current_val).sum() + 1
-            else:
-                rank_month = "-"
             
-            # 1위일 경우 폭죽 효과 텍스트 추가
             firecracker = "🎉" if rank_all == 1 else ""
             return f"{firecracker} 🏆 역대 전체: {rank_all}위  /  📅 역대 {target_date.month}월: {rank_month}위"
-        except Exception as e:
+            
+        except Exception:
+            # 에러 발생 시 None 반환 (화면 표시 안됨) -> 디버깅 필요시 st.error(e) 사용 가능
             return None
 
     if 'data_tab1' not in st.session_state:
@@ -186,6 +222,7 @@ def run_tab1_management():
     current_val = metrics['Day']['gj']['a']
     rank_text = ""
     
+    # 실적값이 0보다 클 때만 랭킹 계산
     if current_val > 0:
         rank_info = get_historical_ranks(current_val, target_date)
         if rank_info:
@@ -279,7 +316,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (타이틀 수정 완료)
+# [탭 2] 공급량 분석
 # ==============================================================================
 def run_tab2_analysis():
     # --- 분석용 헬퍼 함수 ---
@@ -461,7 +498,7 @@ def run_tab2_analysis():
                 plan_curve_x = plan_month['날짜'].dt.day.tolist()
                 plan_curve_y = plan_month['plan_gj'].tolist()
         
-        # [수정] 차트 제목에서 불필요한 텍스트 삭제
+        # [수정] 차트 제목에서 불필요한 텍스트 삭제 확인
         st.markdown(f"### 📈 {sel_month}월 일별 패턴 비교")
         cand_years = sorted(df_all["연"].unique().tolist())
         past_candidates = [y for y in cand_years if y < sel_year]
