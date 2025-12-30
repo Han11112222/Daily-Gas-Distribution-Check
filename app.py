@@ -2,107 +2,116 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="도시가스 공급실적 대시보드", layout="wide")
+st.set_page_config(page_title="도시가스 실적 현황", layout="wide")
 
 def load_data(file_source):
-    # 1. 엑셀을 읽되 시트 이름이 '연간'인 것을 먼저 찾습니다.
+    # 1. 엑셀을 헤더 없이 통째로 읽어옵니다.
     try:
         raw_df = pd.read_excel(file_source, sheet_name='연간', header=None)
     except:
         raw_df = pd.read_excel(file_source, sheet_name=0, header=None)
 
-    # 2. '날짜' 단어가 포함된 행을 찾아 헤더로 설정 (데이터 시작 위치 자동 탐색)
+    # 2. '날짜'라는 글자가 들어있는 행을 찾습니다. (데이터 시작점 찾기)
     header_idx = None
     for i, row in raw_df.iterrows():
-        if row.astype(str).str.contains('날짜').any():
+        # 행의 값들을 문자로 합쳐서 '날짜'가 있는지 확인
+        if '날짜' in row.astype(str).values:
             header_idx = i
             break
     
     if header_idx is None:
-        st.error("❌ '연간' 시트에서 '날짜' 제목을 찾을 수 없습니다. 시트 양식을 확인해주세요.")
+        st.error("❌ '날짜'가 적힌 행을 찾을 수 없습니다.")
         st.stop()
 
-    # 3. 데이터 추출 및 컬럼명 공백 제거
+    # 3. 데이터 본체 추출
+    # 헤더 다음 줄부터 데이터를 가져옵니다.
     df = raw_df.iloc[header_idx+1:].copy()
-    headers = raw_df.iloc[header_idx].astype(str).str.replace(r'\s+', '', regex=True).tolist()
-    df.columns = headers
-
-    # 4. 유연한 컬럼 매칭 (이름이 조금 달라도 핵심 단어로 인식)
-    col_map = {}
-    for col in df.columns:
-        if '날짜' in col: col_map['date'] = col
-        elif '계획' in col and 'GJ' in col: col_map['p_gj'] = col
-        elif '실적' in col and 'GJ' in col: col_map['a_gj'] = col
-        elif '계획' in col and 'm3' in col: col_map['p_m3'] = col
-        elif '실적' in col and 'm3' in col: col_map['a_m3'] = col
-
-    # 5. 데이터 정제 (숫자 변환 및 빈칸 0 처리)
-    final_df = pd.DataFrame()
-    final_df['날짜'] = pd.to_datetime(df[col_map['date']], errors='coerce')
-    final_df = final_df.dropna(subset=['날짜']) # 날짜 없는 줄 제거
     
-    for key in ['p_gj', 'a_gj', 'p_m3', 'a_m3']:
-        if key in col_map:
-            final_df[key] = pd.to_numeric(df[col_map[key]], errors='coerce').fillna(0)
-        else:
-            final_df[key] = 0
-            
-    return final_df
+    # [핵심] 컬럼 이름을 믿지 않고, 순서대로 강제 이름을 붙입니다.
+    # 형님의 파일 순서: 날짜 | 계획(GJ) | 실적(GJ) | 계획(m3) | 실적(m3)
+    # 데이터가 5개 컬럼 이상이라고 가정합니다.
+    try:
+        df = df.iloc[:, :5] # 앞의 5개 컬럼만 자릅니다.
+        df.columns = ['date', 'p_gj', 'a_gj', 'p_m3', 'a_m3']
+    except Exception as e:
+        st.error(f"❌ 데이터 컬럼 개수가 부족합니다. (최소 5열 필요): {e}")
+        st.write("현재 인식된 데이터:", df.head())
+        st.stop()
 
-# 파일 관리 로직 (GitHub 파일 우선, 업로드 시 교체)
-st.sidebar.header("📂 데이터 관리")
-uploaded_file = st.sidebar.file_uploader("새로운 엑셀 업로드 (옵션)", type=["xlsx"])
+    # 4. 데이터 강제 형변환 (에러 방지)
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    df = df.dropna(subset=['date']) # 날짜가 없는 행은 삭제
+    
+    # 숫자로 변환 (빈값은 0으로)
+    cols = ['p_gj', 'a_gj', 'p_m3', 'a_m3']
+    for c in cols:
+        df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+            
+    return df
+
+# --- 메인 로직 ---
+st.title("🔥 도시가스 공급실적 분석")
+
+# 파일 업로드 (사이드바)
+st.sidebar.header("📂 파일 설정")
+uploaded_file = st.sidebar.file_uploader("엑셀 파일 업로드", type=["xlsx"])
 DEFAULT_FILE = "2026_연간_일별공급계획_2.xlsx"
 
 try:
-    df = load_data(uploaded_file if uploaded_file else DEFAULT_FILE)
-    if uploaded_file: st.sidebar.success("✅ 업로드 파일 적용 완료")
-    else: st.sidebar.info("ℹ️ 기본 데이터 사용 중")
+    if uploaded_file:
+        df = load_data(uploaded_file)
+        st.sidebar.success("✅ 업로드 파일 적용됨")
+    else:
+        df = load_data(DEFAULT_FILE)
+        st.sidebar.info("ℹ️ 기본 파일 사용 중")
 except Exception as e:
-    st.error(f"⚠️ 데이터 로드 실패: {e}")
+    st.error(f"⚠️ 시스템 에러: {e}")
     st.stop()
 
-# 화면 구성
-st.title("🔥 도시가스 공급계획 대비 실적 분석")
-selected_date = st.date_input("조회 기준일 선택", value=df['날짜'].min())
+# 날짜 선택
+selected_date = st.date_input("조회 기준일", value=df['date'].min())
 target_date = pd.to_datetime(selected_date)
 
-# 6. 진도율 계산 로직 (형님이 요청하신 진도율 개념 적용)
-def get_metrics(df, t_date):
-    # 당일 실적
-    day = df[df['날짜'] == t_date]
-    # 월간 누계 (해당 월 1일부터 선택일까지의 계획만 합산)
-    mtd = df[(df['날짜'] <= t_date) & (df['날짜'].dt.month == t_date.month) & (df['날짜'].dt.year == t_date.year)]
-    # 연간 누계 (1월 1일부터 선택일까지의 계획만 합산)
-    ytd = df[(df['날짜'] <= t_date) & (df['날짜'].dt.year == t_date.year)]
+# 계산 로직
+def calculate_metrics(df, t_date):
+    day = df[df['date'] == t_date]
+    mtd = df[(df['date'] <= t_date) & (df['date'].dt.month == t_date.month) & (df['date'].dt.year == t_date.year)]
+    ytd = df[(df['date'] <= t_date) & (df['date'].dt.year == t_date.year)]
     
     res = {}
-    for label, d in zip(['일간', '월간누계', '연간누계'], [day, mtd, ytd]):
-        p = d['p_gj'].sum()
-        a = d['a_gj'].sum()
-        # 천 m3 환산
-        m3_actual = d['a_m3'].sum() / 1000 
-        # 0으로 나누기 방지
-        ach = (a / p * 100) if p > 0 else 0
-        res[label] = {'p': p, 'a': a, 'm3': m3_actual, 'ach': ach}
+    for label, d in zip(['일간', '월간', '연간'], [day, mtd, ytd]):
+        p_gj = d['p_gj'].sum()
+        a_gj = d['a_gj'].sum()
+        a_m3 = d['a_m3'].sum() / 1000 # 천 m3
+        
+        rate = (a_gj / p_gj * 100) if p_gj > 0 else 0
+        res[label] = {'p': p_gj, 'a': a_gj, 'm3': a_m3, 'rate': rate}
     return res
 
-m = get_metrics(df, target_date)
+metrics = calculate_metrics(df, target_date)
 
-# 7. 메트릭 레이아웃 출력
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.metric("오늘 실적 (GJ)", f"{m['일간']['a']:,.0f}", f"{m['일간']['ach']-100:.1f}%")
-    st.caption(f"당일 계획: {m['일간']['p']:,.0f} GJ")
+# 결과 표시
+col1, col2, col3 = st.columns(3)
 
-with c2:
-    st.metric("월간 진도율 (MTD)", f"{m['월간누계']['ach']:.1f}%", f"{m['월간누계']['a'] - m['월간누계']['p']:,.0f} GJ")
-    st.write(f"누적 실적: {m['월간누계']['m3']:,.1f} (천 m3)")
+with col1:
+    st.metric("오늘 실적 (GJ)", 
+              f"{metrics['일간']['a']:,.0f}", 
+              f"{metrics['일간']['rate']-100:.1f}%")
+    st.caption(f"계획: {metrics['일간']['p']:,.0f}")
 
-with c3:
-    st.metric("연간 진도율 (YTD)", f"{m['연간누계']['ach']:.1f}%")
-    st.write(f"누적 계획: {m['연간누계']['p']:,.0f} GJ")
+with col2:
+    st.metric("월간 진도율 (MTD)", 
+              f"{metrics['월간']['rate']:.1f}%",
+              f"{metrics['월간']['a'] - metrics['월간']['p']:,.0f} GJ")
+    st.write(f"실적: {metrics['월간']['m3']:,.1f} (천 m3)")
+
+with col3:
+    st.metric("연간 진도율 (YTD)", f"{metrics['연간']['rate']:.1f}%")
+    st.write(f"계획: {metrics['연간']['p']:,.0f} GJ")
 
 st.divider()
-st.subheader("📋 선택일 상세 데이터")
-st.table(df[df['날짜'] == target_date])
+
+# 디버깅용 (형님만 보세요)
+with st.expander("🛠️ 데이터가 이상하면 여기를 눌러보세요"):
+    st.write("읽어온 데이터 샘플 (상위 5개):")
+    st.dataframe(df.head())
