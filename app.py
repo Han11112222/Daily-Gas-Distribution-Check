@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 
-# 1. 화면 설정 (넓게 보기)
+# 1. 화면 설정
 st.set_page_config(page_title="도시가스 공급실적 관리", layout="wide")
 
 # --- 내부 함수: 엑셀 읽기 및 전처리 ---
@@ -27,7 +27,7 @@ def load_excel(file):
     df = raw.iloc[header_idx+1:].copy()
     df.columns = raw.iloc[header_idx].astype(str).str.replace(r'\s+', '', regex=True).tolist()
 
-    # 컬럼 매칭 (예상/계획, GJ/m3 유연하게 찾기)
+    # 컬럼 매칭
     col_map = {}
     for c in df.columns:
         if '연' in c: col_map['y'] = c
@@ -51,7 +51,6 @@ def load_excel(file):
         # 표준 컬럼 생성 (모두 숫자로 변환)
         df['계획(GJ)'] = pd.to_numeric(df[col_map.get('p_gj')], errors='coerce').fillna(0)
         df['실적(GJ)'] = pd.to_numeric(df[col_map.get('a_gj')], errors='coerce').fillna(0)
-        # m3는 원본 그대로 가져옴 (나중에 화면에서만 나누기 위해)
         df['계획(m3)'] = pd.to_numeric(df[col_map.get('p_m3')], errors='coerce').fillna(0)
         df['실적(m3)'] = pd.to_numeric(df[col_map.get('a_m3')], errors='coerce').fillna(0)
         
@@ -97,7 +96,7 @@ df = st.session_state.data
 # --- 메인 화면 ---
 st.title("🔥 도시가스 공급실적 관리")
 
-# 1. 날짜 선택 (작게)
+# 1. 날짜 선택
 col_date, col_space = st.columns([1, 5])
 with col_date:
     selected_date = st.date_input(
@@ -125,10 +124,11 @@ def calc_kpi(data, t):
 
 metrics = calc_kpi(df, target_date)
 
-# 3. 지표 출력 (천단위 쉼표 적용)
+# 3. 지표 출력 (콤마 적용 & 부피 추가)
 st.markdown("---")
 c1, c2, c3 = st.columns(3)
 
+# (1) 일간
 with c1:
     st.metric(
         label=f"일간 실적 ({target_date.strftime('%m.%d')})",
@@ -136,7 +136,10 @@ with c1:
         delta=f"{metrics['Day']['rate']-100:.1f}%"
     )
     st.caption(f"🎯 당일 계획: {int(metrics['Day']['p']):,} GJ")
+    # 부피 추가
+    st.text(f"💧 실적(부피): {int(metrics['Day']['m3']):,} 천 m³")
 
+# (2) 월간 누계
 with c2:
     st.metric(
         label="월간 누적 진도율 (MTD)",
@@ -146,6 +149,7 @@ with c2:
     st.caption(f"🔥 누적 계획: {int(metrics['MTD']['p']):,} GJ")
     st.text(f"💧 실적(부피): {int(metrics['MTD']['m3']):,} 천 m³")
 
+# (3) 연간 누계
 with c3:
     st.metric(
         label="연간 누적 진도율 (YTD)",
@@ -153,18 +157,20 @@ with c3:
         delta=f"{int(metrics['YTD']['a'] - metrics['YTD']['p']):,} GJ"
     )
     st.caption(f"🔥 누적 계획: {int(metrics['YTD']['p']):,} GJ")
+    # 부피 추가
+    st.text(f"💧 실적(부피): {int(metrics['YTD']['m3']):,} 천 m³")
 
 st.markdown("---")
 
-# --- 4. 데이터 입력 테이블 (분리형) ---
+# --- 4. 데이터 입력 테이블 ---
 st.subheader(f"📝 {target_date.month}월 실적 입력")
-st.info("실적을 입력하고 엔터(Enter)를 치면 상단 그래프에 반영됩니다. (모든 숫자는 정수 표기)")
+st.info("실적 입력 후 엔터(Enter)를 치면 즉시 반영됩니다. (자동 정수 및 천단위 쉼표 표기)")
+
+# 해당 월 필터링
+mask_month = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
 
 # (1) 열량(GJ) 테이블
 st.markdown("##### 1️⃣ 열량(GJ) 입력")
-mask_month = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
-
-# GJ용 뷰 생성
 view_gj = df.loc[mask_month, ['날짜', '계획(GJ)', '실적(GJ)']].copy()
 
 edited_gj = st.data_editor(
@@ -176,10 +182,9 @@ edited_gj = st.data_editor(
     },
     hide_index=True,
     use_container_width=True,
-    key="editor_gj" # 키 설정 중요
+    key="editor_gj"
 )
 
-# GJ 수정 반영
 if not edited_gj.equals(view_gj):
     df.update(edited_gj)
     st.session_state.data = df
@@ -189,13 +194,12 @@ st.markdown("---")
 
 # (2) 부피(천 m3) 테이블
 st.markdown("##### 2️⃣ 부피(천 m³) 입력")
-
-# m3용 뷰 생성 (원본 m3 데이터를 1000으로 나눠서 표시)
 view_m3_raw = df.loc[mask_month, ['날짜', '계획(m3)', '실적(m3)']].copy()
 view_m3_display = view_m3_raw.copy()
+
+# 화면 표시용: 1000으로 나누고 정수로 변환
 view_m3_display['계획(천m3)'] = (view_m3_raw['계획(m3)'] / 1000).round(0).astype(int)
 view_m3_display['실적(천m3)'] = (view_m3_raw['실적(m3)'] / 1000).round(0).astype(int)
-# 표시용 데이터프레임 정리
 view_m3_display = view_m3_display[['날짜', '계획(천m3)', '실적(천m3)']]
 
 edited_m3 = st.data_editor(
@@ -210,30 +214,21 @@ edited_m3 = st.data_editor(
     key="editor_m3"
 )
 
-# m3 수정 반영 logic (입력된 천단위 값을 다시 1000 곱해서 원본에 저장)
-# 사용자가 실적(천m3)을 변경했는지 확인
+# m3 수정 반영 (x1000 해서 저장)
 if not edited_m3.equals(view_m3_display):
-    # 변경된 행을 찾아 원본(m3)에 반영
-    # 날짜를 인덱스로 사용하여 매핑하는 것이 안전함
-    
-    # 수정된 천m3 값을 가져와서 1000을 곱함
     new_raw_m3 = edited_m3['실적(천m3)'] * 1000
-    
-    # 원본 데이터프레임(df)의 해당 위치 업데이트
-    # 인덱스가 일치한다고 가정 (mask_month로 잘랐으므로)
     df.loc[mask_month, '실적(m3)'] = new_raw_m3.values
-    
     st.session_state.data = df
     st.rerun()
 
-# (선택) 엑셀 다운로드
+# 엑셀 다운로드
 st.markdown("---")
 buffer = io.BytesIO()
 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
     df.to_excel(writer, sheet_name='연간', index=False)
     
 st.download_button(
-    label="💾 엑셀 파일 다운로드",
+    label="💾 데이터 엑셀 저장",
     data=buffer,
     file_name=f"실적데이터_{target_date.strftime('%Y%m%d')}.xlsx",
     mime="application/vnd.ms-excel"
