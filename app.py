@@ -24,34 +24,45 @@ def set_korean_font():
             pass
 set_korean_font()
 
+# ─────────────────────────────────────────────────────────
+# [0-1] 사이드바 메뉴 (최상단 배치 요청 반영)
+# ─────────────────────────────────────────────────────────
+st.sidebar.title("통합 메뉴")
+menu = st.sidebar.radio("이동", ["1. 도시가스 공급실적 관리", "2. 공급량 분석"])
+st.sidebar.markdown("---") # 구분선
 
 # ─────────────────────────────────────────────────────────
-# [공통] 데이터 로더 (에러 방지 & 합계 제거 강화)
+# [공통] 데이터 로더 (강력한 필터링 & 표준화)
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_history_data(file_content):
     """
     분석용 과거 데이터를 로드하여 전처리하는 함수
+    - 컬럼명을 year, month, day, val_gj로 표준화
+    - 합계 데이터(300만 GJ 이상) 및 날짜 오류 데이터 제거
     """
     try:
         xls = pd.ExcelFile(io.BytesIO(file_content), engine="openpyxl")
         sheet_name = "월별계획_실적" if "월별계획_실적" in xls.sheet_names else xls.sheet_names[0]
         
-        # 헤더 찾기
-        raw = pd.read_excel(xls, sheet_name=sheet_name, header=None)
+        # 헤더 자동 탐색 (1~10행 확인)
+        raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, nrows=20)
         header_idx = None
         for i, row in raw.iterrows():
             row_str = row.astype(str).values
-            if any('연' in s for s in row_str) and any('월' in s for s in row_str):
+            # 연, 월, 실적이라는 단어가 포함된 행을 헤더로 간주
+            if any('연' in s or '년' in s for s in row_str) and \
+               any('월' in s for s in row_str) and \
+               any('실적' in s for s in row_str):
                 header_idx = i
                 break
         
-        if header_idx is None:
-            df = pd.read_excel(xls, sheet_name=sheet_name)
+        # 전체 데이터 로드
+        if header_idx is not None:
+            df = pd.read_excel(xls, sheet_name=sheet_name, header=header_idx)
         else:
-            df = raw.iloc[header_idx+1:].copy()
-            df.columns = raw.iloc[header_idx].astype(str).str.replace(r'\s+', '', regex=True).tolist()
-            
+            df = pd.read_excel(xls, sheet_name=sheet_name)
+
         # 컬럼 매핑 (유연하게 찾기)
         cols = df.columns.astype(str).tolist()
         col_act = next((c for c in cols if '실적' in c and ('GJ' in c or 'MJ' in c)), None)
@@ -59,60 +70,70 @@ def load_history_data(file_content):
         col_month = next((c for c in cols if '월' in c), None)
         col_day = next((c for c in cols if '일' in c), None)
             
-        if not col_act: return None
+        if not col_act or not col_year or not col_month or not col_day:
+            return None
 
-        # 1. 데이터 정제 (숫자 변환)
-        df[col_act] = pd.to_numeric(df[col_act], errors='coerce')
-        df = df.dropna(subset=[col_act])
+        # 1. 표준 컬럼명으로 변경
+        df = df.rename(columns={
+            col_year: 'year',
+            col_month: 'month',
+            col_day: 'day',
+            col_act: 'val_origin'
+        })
+
+        # 2. 데이터 정제 (숫자 변환)
+        for c in ['year', 'month', 'day', 'val_origin']:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
         
-        # 2. 단위 변환 & 컬럼 표준화
-        df['val_gj'] = df[col_act] / 1000.0 if 'MJ' in col_act else df[col_act]
+        # NaN 제거 (날짜나 값이 없는 행 삭제)
+        df = df.dropna(subset=['year', 'month', 'day', 'val_origin'])
         
-        # 3. [핵심] 필터링 (합계 제거 & 이상치 제거)
-        # 조건: 공급량이 3,000,000 GJ 이상이면 월간 합계로 간주하여 제거
-        df = df[df['val_gj'] < 3000000] 
+        # 3. [핵심] 필터링: 합계 및 이상치 제거
+        # 조건 A: '일'이 1~31 정수가 아니면 제거
+        df = df[(df['day'] >= 1) & (df['day'] <= 31)]
+        
+        # 4. 단위 변환 (MJ -> GJ)
+        if 'MJ' in col_act:
+            df['val_gj'] = df['val_origin'] / 1000.0
+        else:
+            df['val_gj'] = df['val_origin']
+            
+        # 조건 B: 일일 공급량이 3,000,000 GJ 이상이면 제거 (월간 합계)
+        df = df[df['val_gj'] < 3000000]
+        # 조건 C: 0 이하 제거
         df = df[df['val_gj'] > 0]
 
-        # 4. 날짜 컬럼 정리 (표준 이름으로 변경)
-        if col_year and col_month and col_day:
-            df[col_year] = pd.to_numeric(df[col_year], errors='coerce')
-            df[col_month] = pd.to_numeric(df[col_month], errors='coerce')
-            df[col_day] = pd.to_numeric(df[col_day], errors='coerce')
-            
-            df = df.dropna(subset=[col_year, col_month, col_day])
-            # 일자가 1~31 아니면 제거 (합계 행일 가능성)
-            df = df[(df[col_day] >= 1) & (df[col_day] <= 31)]
-            
-            df['year'] = df[col_year].astype(int)
-            df['month'] = df[col_month].astype(int)
-            df['day'] = df[col_day].astype(int)
-            
-            return df[['year', 'month', 'day', 'val_gj']]
-        else:
-            # 날짜 컬럼을 못 찾았으면 최소한의 데이터만 리턴 (에러 방지)
-            return df[['val_gj']]
+        # 정수형 변환
+        df['year'] = df['year'].astype(int)
+        df['month'] = df['month'].astype(int)
+        df['day'] = df['day'].astype(int)
+        
+        return df[['year', 'month', 'day', 'val_gj']]
         
     except Exception as e:
-        st.error(f"데이터 로드 중 오류: {e}")
         return None
 
-# 사이드바
+# 사이드바 파일 업로드 (메뉴 아래에 배치)
 st.sidebar.header("📂 [공통] 데이터 파일")
 uploaded_history = st.sidebar.file_uploader("과거 실적(History) 업로드", type=['xlsx'], key="u_hist")
 uploaded_plan = st.sidebar.file_uploader("2026 연간 계획 업로드", type=['xlsx'], key="u_plan")
 
-# 히스토리 로드
+# 히스토리 데이터 로드 및 세션 저장
 if uploaded_history:
     hist_df = load_history_data(uploaded_history.getvalue())
     if hist_df is not None and not hist_df.empty:
         st.session_state['history_df'] = hist_df
         st.sidebar.success(f"✅ 과거 데이터 {len(hist_df):,}건 로드")
+    else:
+        st.sidebar.error("❌ 과거 데이터 로드 실패")
 else:
+    # 기본 파일 로드
     try:
         default_hist_path = Path(__file__).parent / "공급량(계획_실적).xlsx"
-        if default_hist_path.exists():
+        if default_hist_path.exists() and 'history_df' not in st.session_state:
             hist_df = load_history_data(default_hist_path.read_bytes())
-            if hist_df is not None: st.session_state['history_df'] = hist_df
+            if hist_df is not None: 
+                st.session_state['history_df'] = hist_df
     except: pass
 
 
@@ -120,7 +141,6 @@ else:
 # [탭 1] 도시가스 공급실적 관리
 # ==============================================================================
 def run_tab1_management():
-    # --- 내부 함수 ---
     def load_excel_tab1(file):
         try:
             raw = pd.read_excel(file, sheet_name='연간', header=None)
@@ -169,7 +189,6 @@ def run_tab1_management():
 
         return df, None
 
-    # 데이터 로드
     if uploaded_plan:
         df, err = load_excel_tab1(uploaded_plan)
         if not err: st.session_state.data_tab1 = df
@@ -196,7 +215,6 @@ def run_tab1_management():
     target_str = selected_date.strftime('%Y-%m-%d')
     target_obj = pd.to_datetime(selected_date)
 
-    # 지표 계산
     mask_day = df['날짜_str'] == target_str
     mask_mtd = (df['날짜'] <= target_obj) & (df['날짜'].dt.month == target_obj.month) & (df['날짜'].dt.year == target_obj.year)
     mask_ytd = (df['날짜'] <= target_obj) & (df['날짜'].dt.year == target_obj.year)
@@ -212,18 +230,16 @@ def run_tab1_management():
     rank_text = ""
     if 'history_df' in st.session_state and day_a_gj > 0:
         hist_df = st.session_state['history_df']
-        if 'year' in hist_df.columns: # 컬럼이 제대로 있는지 확인
-            # 전체 랭킹
+        # 안전장치: 컬럼 확인
+        if 'year' in hist_df.columns and 'val_gj' in hist_df.columns:
             rank_all = (hist_df['val_gj'] > day_a_gj).sum() + 1
-            # 동월 랭킹
             month_vals = hist_df[hist_df['month'] == target_obj.month]['val_gj']
             rank_month = (month_vals > day_a_gj).sum() + 1
             firecracker = "🎉" if rank_all == 1 else ""
             rank_text = f"{firecracker} 🏆 역대 전체: {rank_all}위  /  📅 역대 {target_obj.month}월: {rank_month}위"
         else:
-            rank_text = "⚠️ 과거 데이터 컬럼 인식 실패 (파일명/헤더 확인)"
+            rank_text = "⚠️ 과거 데이터 포맷 오류 (분석 탭 확인 필요)"
 
-    # 상단 지표
     st.markdown("### 🔥 열량 실적 (GJ)")
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -232,21 +248,6 @@ def run_tab1_management():
         st.caption(f"계획: {int(day_p_gj):,} GJ")
         if rank_text: st.info(rank_text)
         
-    # [범인 색출용 디버거] - KeyError 수정됨
-    with st.expander("🔍 랭킹 데이터 검증 (눌러서 1위~10위 확인)"):
-        if 'history_df' in st.session_state:
-            debug_df = st.session_state['history_df'].copy()
-            st.write(f"현재 로드된 과거 데이터 수: {len(debug_df)}개")
-            st.write("▼ 역대 공급량 Top 10 (이 숫자들이 정상인지 확인하세요)")
-            
-            # 컬럼 존재 여부 확인 후 출력
-            if 'year' in debug_df.columns:
-                st.dataframe(debug_df.nlargest(10, 'val_gj')[['year', 'month', 'day', 'val_gj']], use_container_width=True)
-            else:
-                st.dataframe(debug_df.nlargest(10, 'val_gj'), use_container_width=True)
-        else:
-            st.write("과거 데이터가 로드되지 않았습니다.")
-
     with c2:
         d = df[mask_mtd]
         p, a = d['계획(GJ)'].sum(), d['실적(GJ)'].sum()
@@ -281,7 +282,6 @@ def run_tab1_management():
     st.subheader(f"📝 {target_obj.month}월 실적 입력")
     st.info("💡 값을 입력하고 엔터(Enter)를 치면 즉시 랭킹이 바뀝니다!")
 
-    # 에디터
     mask_edit = (df['날짜'].dt.year == target_obj.year) & (df['날짜'].dt.month == target_obj.month)
     view_gj = df.loc[mask_edit, ['날짜', '계획(GJ)', '실적(GJ)']].copy()
     
@@ -335,25 +335,28 @@ def run_tab1_management():
 # [탭 2] 공급량 분석
 # ==============================================================================
 def run_tab2_analysis():
-    # --- 헬퍼 ---
-    def center_style(styler):
-        styler = styler.set_properties(**{"text-align": "center"})
-        styler = styler.set_table_styles([dict(selector="th", props=[("text-align", "center")])])
-        return styler
+    def _render_supply_top_card(rank, row, icon, gradient):
+        date_str = f"{int(row['year'])}년 {int(row['month'])}월 {int(row['day'])}일"
+        supply_str = f"{row['val_gj']:,.1f} GJ"
+        html = f"""<div style="border-radius:20px;padding:16px 20px;background:{gradient};box-shadow:0 4px 14px rgba(0,0,0,0.06);margin-top:8px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;"><div style="font-size:26px;">{icon}</div><div style="font-size:15px;font-weight:700;">최대 공급량 {rank}위</div></div>
+        <div style="font-size:14px;margin-bottom:3px;">📅 <b>{date_str}</b></div>
+        <div style="font-size:14px;margin-bottom:3px;">🔥 공급량: <b>{supply_str}</b></div>
+        </div>"""
+        st.markdown(html, unsafe_allow_html=True)
 
-    # 데이터 로드 (세션 대신 원본 바이트 재활용 권장 for Tab 2 visual)
+    # 데이터 로드 (세션에 있는 clean data 사용)
     if 'history_df' not in st.session_state:
         st.info("👈 좌측 사이드바에서 '과거 실적(History)' 파일을 업로드해주세요.")
         return
 
-    # 여기서는 시각화를 위해 원본 데이터(history_df)를 사용합니다.
-    # 이미 로드 시에 필터링(합계 제거 등)이 완료된 clean data입니다.
-    df_all = st.session_state['history_df'].copy()
+    # KeyError 해결: 이미 load_history_data에서 컬럼명을 [year, month, day, val_gj]로 통일했습니다.
+    df_clean = st.session_state['history_df'].copy()
     
     st.title("📊 도시가스 공급량 분석 (일별)")
     
     # 1. 기준 선택
-    years = sorted(df_all["year"].unique().tolist())
+    years = sorted(df_clean["year"].unique().tolist())
     def_year = 2026 if 2026 in years else (years[-1] if years else 2026)
     
     st.markdown("#### ✅ 분석 기준 선택")
@@ -375,27 +378,44 @@ def run_tab2_analysis():
     # 과거
     colors = ["#93C5FD", "#A5B4FC", "#C4B5FD", "#FDA4AF"]
     for i, y in enumerate(sel_past):
-        sub = df_all[(df_all["year"] == y) & (df_all["month"] == sel_month)]
+        sub = df_clean[(df_clean["year"] == y) & (df_clean["month"] == sel_month)]
         if sub.empty: continue
         col = colors[i % 4]
         width = 3 if y == sel_year - 1 else 1.5
         fig.add_scatter(x=sub["day"], y=sub["val_gj"], name=f"{y}년", line=dict(color=col, width=width))
         
-    # 금년
-    this_df = df_all[(df_all["year"] == sel_year) & (df_all["month"] == sel_month)]
+    # 금년 (선택 연도)
+    this_df = df_clean[(df_clean["year"] == sel_year) & (df_clean["month"] == sel_month)]
     if not this_df.empty:
         fig.add_scatter(x=this_df["day"], y=this_df["val_gj"], name=f"{sel_year}년", line=dict(color="black", width=4))
         
     fig.update_layout(height=450, margin=dict(t=30, b=10, l=10, r=10), xaxis_title="일", yaxis_title="공급량 (GJ)")
     st.plotly_chart(fig, use_container_width=True)
 
+    # 3. Top 랭킹
+    st.markdown("---")
+    st.markdown(f"### 💎 {sel_month}월 공급량 Top 랭킹")
+    
+    # 월간 랭킹
+    month_all = df_clean[df_clean["month"] == sel_month].sort_values("val_gj", ascending=False).head(5)
+    month_all.insert(0, "Rank", range(1, len(month_all) + 1))
+    
+    if not month_all.empty:
+        top3 = month_all.head(3)
+        c1, c2, c3 = st.columns(3)
+        icons, grads = ["🥇", "🥈", "🥉"], ["linear-gradient(120deg,#eff6ff,#fef9c3)", "linear-gradient(120deg,#f9fafb,#e5e7eb)", "linear-gradient(120deg,#fff7ed,#fef9c3)"]
+        
+        for i, (_, row) in enumerate(top3.iterrows()):
+            with [c1, c2, c3][i]: _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
+        
+        st.dataframe(month_all[['Rank', 'year', 'month', 'day', 'val_gj']], use_container_width=True, hide_index=True)
+    else:
+        st.info("해당 월의 데이터가 없습니다.")
+
 
 # ==============================================================================
 # [메인 실행]
 # ==============================================================================
-st.sidebar.title("통합 메뉴")
-menu = st.sidebar.radio("이동", ["1. 도시가스 공급실적 관리", "2. 공급량 분석"])
-
 if menu == "1. 도시가스 공급실적 관리":
     run_tab1_management()
 else:
