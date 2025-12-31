@@ -26,12 +26,14 @@ set_korean_font()
 
 
 # ─────────────────────────────────────────────────────────
-# [공통] 데이터 로더 (검증 기능 강화)
+# [공통] 데이터 로더 (강력한 필터링 적용)
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_history_data(file_content):
     """
     분석용 과거 데이터를 로드하여 전처리하는 함수
+    - '일' 컬럼이 1~31 숫자인 행만 남김 (합계/소계 제거)
+    - 공급량이 200만 GJ 이상이면 합계로 간주하여 제거
     """
     try:
         xls = pd.ExcelFile(io.BytesIO(file_content), engine="openpyxl")
@@ -61,47 +63,49 @@ def load_history_data(file_content):
             
         if not col_act: return None
 
-        # 데이터 정제
-        # 1. 값이 있는 행만
+        # 1. 숫자 변환 및 NaN 제거
         df[col_act] = pd.to_numeric(df[col_act], errors='coerce')
         df = df.dropna(subset=[col_act])
         
-        # 2. 단위 변환
+        # 2. 단위 변환 (MJ -> GJ)
         if 'MJ' in col_act:
             df['val_gj'] = df[col_act] / 1000.0
         else:
             df['val_gj'] = df[col_act]
 
-        # 3. [중요] 필터링 (합계 제거)
-        # 일(Day)이 1~31 숫자가 아니면 제거 (합계 행 제거)
+        # 3. [핵심] 필터링: 합계 데이터 제거
+        # 조건 A: '일' 정보가 없거나 1~31 범위가 아니면 제거
         if col_day:
             df[col_day] = pd.to_numeric(df[col_day], errors='coerce')
             df = df.dropna(subset=[col_day])
             df = df[(df[col_day] >= 1) & (df[col_day] <= 31)]
             df['day'] = df[col_day].astype(int)
         
-        # 4. 안전장치: 일일 공급량이 200만 GJ을 넘을 수 없음 (월간 합계로 간주하여 제거)
+        # 조건 B: 일일 공급량이 2,000,000 GJ 이상이면 제거 (월간 합계일 확률 100%)
+        # (보통 일일 최대가 70~80만 수준임)
         df = df[df['val_gj'] < 2000000]
+        # 조건 C: 0 이하 제거
+        df = df[df['val_gj'] > 0]
 
         if col_month:
             df[col_month] = pd.to_numeric(df[col_month], errors='coerce')
-            df['month'] = df[col_month]
+            df['month'] = df[col_month].astype(int)
             
         if col_year:
             df[col_year] = pd.to_numeric(df[col_year], errors='coerce')
-            df['year'] = df[col_year]
+            df['year'] = df[col_year].astype(int)
         
-        return df[['year', 'month', 'day', 'val_gj']] if 'year' in df.columns else df[['month', 'val_gj']]
+        return df
         
     except Exception:
         return None
 
-# 사이드바
+# 사이드바 (파일 업로드)
 st.sidebar.header("📂 [공통] 데이터 파일")
-uploaded_history = st.sidebar.file_uploader("과거 실적(History) 업로드", type=['xlsx'], key="u_hist")
-uploaded_plan = st.sidebar.file_uploader("2026 연간 계획 업로드", type=['xlsx'], key="u_plan")
+uploaded_history = st.sidebar.file_uploader("과거 실적(History) 업로드", type=['xlsx'], key="u_hist", help="Tab 1 랭킹과 Tab 2 분석에 사용됩니다.")
+uploaded_plan = st.sidebar.file_uploader("2026 연간 계획 업로드", type=['xlsx'], key="u_plan", help="Tab 1 관리 화면에 사용됩니다.")
 
-# 히스토리 로드
+# 히스토리 로드 및 세션 저장
 if uploaded_history:
     hist_df = load_history_data(uploaded_history.getvalue())
     if hist_df is not None and not hist_df.empty:
@@ -157,7 +161,7 @@ def run_tab1_management():
                 'day': pd.to_numeric(df[col_map['d']], errors='coerce')
             }, errors='coerce')
             df = df.dropna(subset=['날짜'])
-            df['날짜_str'] = df['날짜'].dt.strftime('%Y-%m-%d') # 문자열 비교용
+            df['날짜_str'] = df['날짜'].dt.strftime('%Y-%m-%d')
 
             df['계획(GJ)'] = pd.to_numeric(df[col_map.get('p_gj')], errors='coerce').fillna(0)
             df['실적(GJ)'] = pd.to_numeric(df[col_map.get('a_gj')], errors='coerce').fillna(0)
@@ -208,7 +212,7 @@ def run_tab1_management():
     else:
         day_p_gj = day_a_gj = day_p_m3 = day_a_m3 = 0
 
-    # 랭킹 계산
+    # 랭킹 계산 (실시간)
     rank_text = ""
     if 'history_df' in st.session_state and day_a_gj > 0:
         hist_df = st.session_state['history_df']
@@ -229,13 +233,13 @@ def run_tab1_management():
         st.caption(f"계획: {int(day_p_gj):,} GJ")
         if rank_text: st.info(rank_text) # 랭킹 표시
         
-    # [범인 색출용 디버거]
-    with st.expander("🔍 랭킹 데이터 검증 (여기를 눌러 1~20위 확인)"):
+    # [범인 색출용 디버거] - Han형님을 위해 추가함
+    with st.expander("🔍 랭킹 데이터 검증 (눌러서 1위~10위 확인)"):
         if 'history_df' in st.session_state:
             debug_df = st.session_state['history_df'].copy()
-            st.markdown("##### 🚨 역대 공급량 Top 20 (범인 색출)")
-            st.dataframe(debug_df.nlargest(20, 'val_gj')[['year', 'month', 'day', 'val_gj']], use_container_width=True)
-            st.caption("※ 만약 여기에 말도 안 되게 큰 숫자가 있다면, 엑셀 파일에 '합계' 행이 포함된 것입니다.")
+            st.write(f"현재 로드된 과거 데이터 수: {len(debug_df)}개")
+            st.write("▼ 역대 공급량 Top 10 (이 중에 이상하게 큰 숫자가 있는지 보세요)")
+            st.dataframe(debug_df.nlargest(10, 'val_gj')[['year', 'month', 'day', 'val_gj']], use_container_width=True)
         else:
             st.write("과거 데이터가 로드되지 않았습니다.")
 
@@ -324,52 +328,37 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석
+# [탭 2] 공급량 분석 (화면 복구 및 그래프 연결)
 # ==============================================================================
 def run_tab2_analysis():
-    # --- 헬퍼 ---
     def center_style(styler):
         styler = styler.set_properties(**{"text-align": "center"})
         styler = styler.set_table_styles([dict(selector="th", props=[("text-align", "center")])])
         return styler
 
-    def pick_year(years): return 2026 if 2026 in years else (years[-1] if years else 2026)
+    def _render_supply_top_card(rank, row, icon, gradient):
+        date_str = f"{int(row['year'])}년 {int(row['month'])}월 {int(row['day'])}일"
+        supply_str = f"{row['val_gj']:,.1f} GJ"
+        html = f"""<div style="border-radius:20px;padding:16px 20px;background:{gradient};box-shadow:0 4px 14px rgba(0,0,0,0.06);margin-top:8px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;"><div style="font-size:26px;">{icon}</div><div style="font-size:15px;font-weight:700;">최대 공급량 {rank}위</div></div>
+        <div style="font-size:14px;margin-bottom:3px;">📅 <b>{date_str}</b></div>
+        <div style="font-size:14px;margin-bottom:3px;">🔥 공급량: <b>{supply_str}</b></div>
+        </div>"""
+        st.markdown(html, unsafe_allow_html=True)
 
-    # 데이터 로드 (세션 대신 원본 바이트 재활용 권장 for Tab 2 visual)
-    if 'u_hist' in st.session_state and st.session_state.u_hist:
-        supply_bytes = st.session_state.u_hist.getvalue()
-    else:
-        try:
-            path = Path(__file__).parent / "공급량(계획_실적).xlsx"
-            if path.exists(): supply_bytes = path.read_bytes()
-            else: supply_bytes = None
-        except: supply_bytes = None
-
-    if not supply_bytes:
-        st.warning("분석할 데이터가 없습니다.")
+    # 데이터 로드 (세션 활용)
+    if 'history_df' not in st.session_state:
+        st.info("👈 좌측 사이드바에서 '과거 실적(History)' 파일을 업로드해주세요.")
         return
 
-    # 엑셀 파싱
-    xls = pd.ExcelFile(io.BytesIO(supply_bytes), engine="openpyxl")
-    month_df = xls.parse("월별계획_실적") if "월별계획_실적" in xls.sheet_names else pd.DataFrame()
-    day_df = xls.parse("일별실적") if "일별실적" in xls.sheet_names else pd.DataFrame()
-
-    # 전처리 (간소화)
-    if not month_df.empty:
-        month_df["연"] = pd.to_numeric(month_df["연"], errors="coerce").fillna(0).astype(int)
-        month_df["월"] = pd.to_numeric(month_df["월"], errors="coerce").fillna(0).astype(int)
-    if not day_df.empty:
-        day_df["일자"] = pd.to_datetime(day_df["일자"], errors="coerce")
-        for c in day_df.columns:
-            if "공급량" in c or "기온" in c: day_df[c] = pd.to_numeric(day_df[c], errors="coerce").fillna(0)
+    # 분석용 전체 데이터 (필터링된 깨끗한 데이터)
+    df_clean = st.session_state['history_df'].copy()
     
     st.title("📊 도시가스 공급량 분석 (일별)")
     
-    act_col = "실적_공급량(MJ)"
-    
     # 1. 기준 선택
-    years = sorted(month_df["연"].unique().tolist()) if not month_df.empty else []
-    def_year = pick_year(years)
+    years = sorted(df_clean["year"].unique().tolist())
+    def_year = 2026 if 2026 in years else (years[-1] if years else 2026)
     
     st.markdown("#### ✅ 분석 기준 선택")
     c1, c2 = st.columns([1, 4])
@@ -382,10 +371,6 @@ def run_tab2_analysis():
     # 2. 그래프
     st.markdown(f"### 📈 {sel_month}월 일별 패턴 비교")
     
-    day_df["연"] = day_df["일자"].dt.year
-    day_df["월"] = day_df["일자"].dt.month
-    day_df["일"] = day_df["일자"].dt.day
-    
     past_years = [y for y in years if y < sel_year][-3:] # 최근 3년
     sel_past = st.multiselect("비교할 과거 연도", [y for y in years if y < sel_year], default=past_years)
     
@@ -394,19 +379,36 @@ def run_tab2_analysis():
     # 과거
     colors = ["#93C5FD", "#A5B4FC", "#C4B5FD", "#FDA4AF"]
     for i, y in enumerate(sel_past):
-        sub = day_df[(day_df["연"] == y) & (day_df["월"] == sel_month)]
+        sub = df_clean[(df_clean["year"] == y) & (df_clean["month"] == sel_month)]
         if sub.empty: continue
         col = colors[i % 4]
         width = 3 if y == sel_year - 1 else 1.5
-        fig.add_scatter(x=sub["일"], y=sub["공급량(MJ)"]/1000, name=f"{y}년", line=dict(color=col, width=width))
+        fig.add_scatter(x=sub["day"], y=sub["val_gj"], name=f"{y}년", line=dict(color=col, width=width))
         
-    # 금년 (Tab 1 데이터가 있다면 여기서 그려주면 좋음)
-    this_df = day_df[(day_df["연"] == sel_year) & (day_df["월"] == sel_month)]
+    # 금년 (선택 연도)
+    this_df = df_clean[(df_clean["year"] == sel_year) & (df_clean["month"] == sel_month)]
     if not this_df.empty:
-        fig.add_scatter(x=this_df["일"], y=this_df["공급량(MJ)"]/1000, name=f"{sel_year}년", line=dict(color="black", width=4))
+        fig.add_scatter(x=this_df["day"], y=this_df["val_gj"], name=f"{sel_year}년", line=dict(color="black", width=4))
         
-    fig.update_layout(height=450, margin=dict(t=30, b=10, l=10, r=10))
+    fig.update_layout(height=450, margin=dict(t=30, b=10, l=10, r=10), xaxis_title="일", yaxis_title="공급량 (GJ)")
     st.plotly_chart(fig, use_container_width=True)
+
+    # 3. Top 랭킹 (Han형님 요청 복구)
+    st.markdown("---")
+    st.markdown(f"### 💎 {sel_month}월 공급량 Top 랭킹")
+    
+    # 월간 랭킹
+    month_all = df_clean[df_clean["month"] == sel_month].sort_values("val_gj", ascending=False).head(5)
+    month_all.insert(0, "Rank", range(1, len(month_all) + 1))
+    
+    top3 = month_all.head(3)
+    c1, c2, c3 = st.columns(3)
+    icons, grads = ["🥇", "🥈", "🥉"], ["linear-gradient(120deg,#eff6ff,#fef9c3)", "linear-gradient(120deg,#f9fafb,#e5e7eb)", "linear-gradient(120deg,#fff7ed,#fef9c3)"]
+    
+    for i, (_, row) in enumerate(top3.iterrows()):
+        with [c1, c2, c3][i]: _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
+    
+    st.dataframe(month_all[['Rank', 'year', 'month', 'day', 'val_gj']], use_container_width=True, hide_index=True)
 
 
 # ==============================================================================
