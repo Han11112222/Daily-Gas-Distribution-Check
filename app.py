@@ -26,7 +26,7 @@ set_korean_font()
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (랭킹 오류 완벽 해결)
+# [탭 1] 도시가스 공급실적 관리 (랭킹 오류 완벽 해결 버전 유지)
 # ==============================================================================
 def run_tab1_management():
     # --- 내부 함수 ---
@@ -89,7 +89,7 @@ def run_tab1_management():
             return None 
 
         try:
-            # 1. 파일 읽기 (헤더 찾기 로직 포함)
+            # 1. 파일 읽기
             xls = pd.ExcelFile(history_file, engine="openpyxl")
             sheet_name = "월별계획_실적" if "월별계획_실적" in xls.sheet_names else xls.sheet_names[0]
             
@@ -117,45 +117,37 @@ def run_tab1_management():
             
             if col_act is None: return None
 
-            # 3. 데이터 정제 (여기가 핵심!)
-            # 숫자로 변환 안되는 것들(텍스트 등) 모두 제거
+            # 3. 데이터 정제
             df_hist[col_act] = pd.to_numeric(df_hist[col_act], errors='coerce')
             df_hist = df_hist.dropna(subset=[col_act])
 
-            # 단위 통일 (MJ -> GJ)
             vals = df_hist[col_act].values
             if 'MJ' in col_act:
                 vals = vals / 1000.0
             
-            # [필터] 값이 0 이하이거나, 2,000,000 이상인 경우(월간 합계일 확률 99%) 제거
-            # Han형님의 144위 문제는 여기서 해결됩니다. (합계 데이터 제거)
+            # [필터] 합계 데이터(200만 이상) 제외 및 0 이하 제외
             valid_mask = (vals > 0) & (vals < 2000000)
             clean_vals = vals[valid_mask]
             
-            # 4. 순위 계산 (입력값 vs 과거값들)
-            # (1) 역대 전체 랭킹
+            # 4. 순위 계산
             rank_all = (clean_vals > current_val).sum() + 1
             
-            # (2) 역대 동월 랭킹
             rank_month = "-"
             if col_month:
                 df_hist[col_month] = pd.to_numeric(df_hist[col_month], errors='coerce')
-                # 위에서 만든 valid_mask와 월 조건을 동시에 만족하는 데이터만 추출
                 month_mask = (df_hist[col_month] == target_date.month) & (df_hist.index.isin(df_hist[valid_mask].index))
                 
-                # 원본에서 다시 가져오기보다는, 마스크로 필터링
                 month_vals_raw = df_hist.loc[month_mask, col_act].values
                 if 'MJ' in col_act:
                     month_vals_clean = month_vals_raw / 1000.0
                 else:
                     month_vals_clean = month_vals_raw
                 
-                # 합계 데이터 2차 방어 (혹시 몰라 한 번 더 필터)
+                # 합계 데이터 2차 방어
                 month_vals_clean = month_vals_clean[month_vals_clean < 2000000]
                 
                 rank_month = (month_vals_clean > current_val).sum() + 1
             
-            # 1위일 경우 폭죽
             firecracker = "🎉" if rank_all == 1 else ""
             return f"{firecracker} 🏆 역대 전체: {rank_all}위  /  📅 역대 {target_date.month}월: {rank_month}위"
             
@@ -192,7 +184,6 @@ def run_tab1_management():
         st.warning("👈 좌측 사이드바에서 엑셀 파일을 업로드해주세요.")
         return
 
-    # 세션에 저장된 데이터프레임을 가져옵니다.
     df = st.session_state.data_tab1
 
     st.title("🔥 도시가스 공급실적 관리")
@@ -202,7 +193,6 @@ def run_tab1_management():
         selected_date = st.date_input("조회 기준일", value=df['날짜'].min(), label_visibility="collapsed")
     target_date = pd.to_datetime(selected_date)
 
-    # 1. KPI 계산 함수
     def calc_kpi(data, t):
         mask_day = data['날짜'] == t
         mask_mtd = (data['날짜'] <= t) & (data['날짜'].dt.month == t.month) & (data['날짜'].dt.year == t.year)
@@ -225,19 +215,15 @@ def run_tab1_management():
             }
         return res
 
-    # 2. KPI 산출
     metrics = calc_kpi(df, target_date)
-    current_val_gj = metrics['Day']['gj']['a'] # 현재 화면에 표시될 일간 실적
+    current_val_gj = metrics['Day']['gj']['a'] 
 
-    # 3. [중요] 랭킹 실시간 계산
-    # 사용자가 데이터를 수정하면 df가 업데이트되고 -> 페이지 리런 -> 여기 도달 -> 업데이트된 값으로 랭킹 계산
     rank_text = ""
     if current_val_gj > 0:
         rank_info = get_historical_ranks(current_val_gj, target_date)
         if rank_info:
             rank_text = rank_info
 
-    # 4. 화면 표시 (Metrics)
     st.markdown("### 🔥 열량 실적 (GJ)")
     col_g1, col_g2, col_g3 = st.columns(3)
     
@@ -245,8 +231,6 @@ def run_tab1_management():
         m = metrics['Day']['gj']
         st.metric(label=f"일간 달성률 {m['rate']:.1f}%", value=f"{int(m['a']):,} GJ", delta=f"{int(m['diff']):+,} GJ")
         st.caption(f"계획: {int(m['p']):,} GJ")
-        
-        # 랭킹 표시 (값이 있을 때만)
         if rank_text:
             st.info(rank_text)
 
@@ -281,7 +265,6 @@ def run_tab1_management():
 
     mask_month = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
 
-    # 5. 데이터 입력 에디터
     st.markdown("##### 1️⃣ 열량(GJ) 입력")
     view_gj = df.loc[mask_month, ['날짜', '계획(GJ)', '실적(GJ)']].copy()
     edited_gj = st.data_editor(
@@ -293,14 +276,9 @@ def run_tab1_management():
         },
         hide_index=True, use_container_width=True, key="editor_gj"
     )
-    
-    # [데이터 수정 감지 로직]
     if not edited_gj.equals(view_gj):
-        # 1. 수정된 데이터프레임으로 원본 업데이트
         df.update(edited_gj)
-        # 2. 세션 상태 업데이트 (가장 중요)
         st.session_state.data_tab1 = df
-        # 3. 페이지 리런 -> 위쪽의 calc_kpi와 get_historical_ranks가 갱신된 값으로 다시 실행됨
         st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -320,7 +298,6 @@ def run_tab1_management():
         },
         hide_index=True, use_container_width=True, key="editor_m3"
     )
-    
     if not edited_m3.equals(view_m3_display):
         new_raw_m3 = edited_m3['실적(천m3)'] * 1000
         df.loc[mask_month, '실적(m3)'] = new_raw_m3.values
@@ -335,7 +312,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석
+# [탭 2] 공급량 분석 (화면 복구 완료)
 # ==============================================================================
 def run_tab2_analysis():
     # --- 분석용 헬퍼 함수 ---
@@ -514,7 +491,6 @@ def run_tab2_analysis():
                 plan_curve_x = plan_month['날짜'].dt.day.tolist()
                 plan_curve_y = plan_month['plan_gj'].tolist()
         
-        # [수정 확인] '(최근 3년 + 계획)' 문구 삭제됨
         st.markdown(f"### 📈 {sel_month}월 일별 패턴 비교")
         cand_years = sorted(df_all["연"].unique().tolist())
         past_candidates = [y for y in cand_years if y < sel_year]
