@@ -67,7 +67,7 @@ def load_historical_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (완벽 유지)
+# [탭 1] 도시가스 공급실적 관리 (수정됨: 랭킹 텍스트 크기 확대)
 # ==============================================================================
 def run_tab1_management():
     if 'tab1_df' not in st.session_state:
@@ -127,8 +127,9 @@ def run_tab1_management():
         rate_gj = (current_val_gj / plan_val_gj * 100) if plan_val_gj > 0 else 0
         st.metric(label=f"일간 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
         st.caption(f"계획: {int(plan_val_gj):,} GJ")
+        # [수정] 랭킹 텍스트 크기 1.5배 확대 (HTML span 태그 사용)
         if rank_text:
-            st.markdown(f":red[**{rank_text}**]")
+            st.markdown(f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span>", unsafe_allow_html=True)
 
     with col_g2:
         st.metric(label=f"월간 누적 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
@@ -201,7 +202,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 하이라이트 카드 글씨 크기 확대 및 제목 변경)
+# [탭 2] 공급량 분석 (수정됨: 하이라이트 카드 축소 및 평균기온 추가)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -419,10 +420,13 @@ def run_tab2_analysis():
                 rank_month = (month_vals_gj > max_val_gj).sum() + 1
                 target_date_str = f"{int(max_row['연'])}년 {int(max_row['월'])}월 {int(max_row['일'])}일"
                 
-                # [수정] 하이라이트 카드: 제목 변경 및 글씨 크기 2배 확대
-                st.markdown(f"""<div style="background-color:#e0f2fe;padding:20px;border-radius:10px;border:1px solid #bae6fd;margin-bottom:20px;">
-                    <h3 style="margin:0; color:#0369a1; font-size: 24px;">📢 {target_date_str} 실적 랭킹</h3>
-                    <div style="font-size:30px; margin-top:10px; color:#333; line-height: 1.4;">공급량: <b>{max_val_gj:,.1f} GJ</b> ➡️ <span style="background-color:#fff; padding:4px 12px; border-radius:5px; border:2px solid #ddd; margin-left:10px; font-size: 28px;">🏆 역대 전체 <b>{rank_total}위</b></span> <span style="background-color:#fff; padding:4px 12px; border-radius:5px; border:2px solid #ddd; margin-left:10px; font-size: 28px;">📅 역대 {sel_month}월 중 <b>{rank_month}위</b></span></div></div>""", unsafe_allow_html=True)
+                # [수정] 하이라이트 카드 축소(원복) 및 평균기온 추가
+                max_temp = max_row['평균기온(℃)']
+                temp_str = f"{max_temp:.1f}℃" if not pd.isna(max_temp) else "-"
+
+                st.markdown(f"""<div style="background-color:#e0f2fe;padding:15px;border-radius:10px;border:1px solid #bae6fd;margin-bottom:20px;">
+                    <h4 style="margin:0; color:#0369a1;">📢 {target_date_str} 실적 랭킹</h4>
+                    <div style="font-size:16px; margin-top:5px; color:#333;">공급량: <b>{max_val_gj:,.1f} GJ</b> (🌡️ 평균기온: <b>{temp_str}</b>) ➡️ <span style="background-color:#fff; padding:2px 8px; border-radius:5px; border:1px solid #ddd; margin-left:5px;">🏆 역대 전체 <b>{rank_total}위</b></span> <span style="background-color:#fff; padding:2px 8px; border-radius:5px; border:1px solid #ddd; margin-left:5px;">📅 역대 {sel_month}월 중 <b>{rank_month}위</b></span></div></div>""", unsafe_allow_html=True)
             
             month_all["공급량_GJ"] = month_all[act_col] / 1000.0
             rank_df = month_all.sort_values("공급량_GJ", ascending=False).head(top_n).copy()
