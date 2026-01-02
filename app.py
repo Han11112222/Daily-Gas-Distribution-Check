@@ -27,14 +27,6 @@ set_korean_font()
 # ─────────────────────────────────────────────────────────
 # [공통] 데이터 로드 및 정제 함수 (Tab 1, Tab 2 공용)
 # ─────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
-def load_supply_sheets_common(excel_bytes):
-    """엑셀 파일에서 월별/일별 시트 로드 (공통 사용)"""
-    xls = pd.ExcelFile(io.BytesIO(excel_bytes), engine="openpyxl")
-    month_df = xls.parse("월별계획_실적") if "월별계획_실적" in xls.sheet_names else pd.DataFrame()
-    day_df = xls.parse("일별실적") if "일별실적" in xls.sheet_names else pd.DataFrame()
-    return month_df, day_df
-
 def clean_supply_day_df_common(df):
     """일별 데이터 정제 (공통 사용)"""
     if df.empty: return df
@@ -51,19 +43,47 @@ def clean_supply_day_df_common(df):
     
     # 숫자 변환
     for c in ["공급량(MJ)", "공급량(M3)", "평균기온(℃)"]:
-        if c in df.columns: 
-            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+        target_col = next((col for col in df.columns if c in col), None)
+        if target_col: 
+            df[target_col] = pd.to_numeric(df[target_col], errors="coerce").fillna(0)
     
-    # 표준 컬럼명으로 리턴
-    return df.rename(columns={col_date: '일자'})
+    # 표준 컬럼명으로 리턴 (일자, 공급량(MJ) 필수)
+    rename_map = {col_date: '일자'}
+    col_mj = next((c for c in df.columns if "공급량" in c and "MJ" in c), None)
+    if col_mj: rename_map[col_mj] = '공급량(MJ)'
+    
+    return df.rename(columns=rename_map)
 
-def get_history_file_bytes():
-    """레포지토리의 기본 파일 읽기"""
-    path = Path(__file__).parent / "공급량(계획_실적).xlsx"
-    if path.exists():
-        return path.read_bytes()
-    return None
-
+# ─────────────────────────────────────────────────────────
+# [데이터 캐싱] 깃허브/로컬 파일 자동 로드
+# ─────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def load_repo_supply_data():
+    """레포지토리의 기본 파일을 읽어서 일별/월별 데이터를 반환"""
+    # 1순위: 공급량(계획_실적).xlsx
+    candidates = ["공급량(계획_실적).xlsx", "2026_연간_일별공급계획_2.xlsx"]
+    target_path = None
+    
+    for fname in candidates:
+        path = Path(__file__).parent / fname
+        if path.exists():
+            target_path = path
+            break
+            
+    if not target_path: return None, None
+    
+    try:
+        xls = pd.ExcelFile(target_path, engine="openpyxl")
+        # 시트 이름 찾기 (유연하게)
+        sheet_day = next((s for s in xls.sheet_names if "일별" in s), xls.sheet_names[0])
+        sheet_month = next((s for s in xls.sheet_names if "월별" in s), None)
+        
+        day_df = pd.read_excel(xls, sheet_name=sheet_day)
+        month_df = pd.read_excel(xls, sheet_name=sheet_month) if sheet_month else pd.DataFrame()
+        
+        return day_df, month_df
+    except:
+        return None, None
 
 # ==============================================================================
 # [탭 1] 도시가스 공급실적 관리
@@ -121,38 +141,45 @@ def run_tab1_management():
 
         return df, None
 
-    # [핵심 수정] Tab 2와 100% 동일한 데이터 소스 사용
+    # [핵심 수정] Tab 2와 동일한 데이터를 사용하여 랭킹 계산 (세션 스테이트 활용)
     def get_historical_ranks_unified(current_val_gj, target_date):
         try:
-            # 1. 파일 바이트 로드
-            file_bytes = get_history_file_bytes()
-            if not file_bytes: return None
-
-            # 2. Tab 2와 동일한 로더 사용
-            _, day_df = load_supply_sheets_common(file_bytes)
-            day_df = clean_supply_day_df_common(day_df) # 정제
+            # 1. 데이터 소스 확보 (Session State > File Load)
+            if 'supply_day_df' in st.session_state and not st.session_state.supply_day_df.empty:
+                # Tab 2에서 이미 로드된 데이터가 있으면 사용
+                day_df = st.session_state.supply_day_df.copy()
+            else:
+                # 없으면 직접 로드
+                day_raw, _ = load_repo_supply_data()
+                if day_raw is None: return None
+                day_df = clean_supply_day_df_common(day_raw)
 
             if day_df.empty or '공급량(MJ)' not in day_df.columns:
                 return None
 
             # 3. 단위 변환 (MJ -> GJ) 및 필터링
+            # Tab 2의 raw data는 MJ 단위임
             day_df['val_gj'] = day_df['공급량(MJ)'] / 1000.0
             
             # 유효 데이터만 남김 (0보다 큰 값)
             valid_hist = day_df[day_df['val_gj'] > 0].copy()
 
-            # 4. 중복 제거: 입력 중인 날짜 데이터 제외
+            # 4. 중복 제거: 만약 파일 안에 이미 '오늘 날짜'의 데이터가 저장되어 있다면 제외
+            # (사용자가 지금 입력하고 있는 값(current_val_gj)을 우선시하기 위함)
             valid_hist = valid_hist[valid_hist['일자'] != target_date]
 
             # 5. 전체 랭킹 계산 (과거 데이터 + 현재 입력값)
-            all_values = pd.concat([valid_hist['val_gj'], pd.Series([current_val_gj])])
+            # 현재 입력값을 리스트에 추가해서 순위를 매깁니다.
+            all_values = pd.concat([valid_hist['val_gj'], pd.Series([float(current_val_gj)])])
+            # 내림차순 랭킹 (값이 클수록 1위)
             rank_all = (all_values > current_val_gj).sum() + 1
             
             # 6. 동월 랭킹 계산
             hist_month = valid_hist[valid_hist['일자'].dt.month == target_date.month]
-            month_values = pd.concat([hist_month['val_gj'], pd.Series([current_val_gj])])
+            month_values = pd.concat([hist_month['val_gj'], pd.Series([float(current_val_gj)])])
             rank_month = (month_values > current_val_gj).sum() + 1
             
+            # 1위일 경우 폭죽
             firecracker = "🎉" if rank_all == 1 else ""
             return f"{firecracker} 🏆 역대 전체: {rank_all}위  /  📅 역대 {target_date.month}월: {rank_month}위"
 
@@ -165,7 +192,7 @@ def run_tab1_management():
     st.sidebar.header("📂 [관리] 데이터 파일")
     uploaded = st.sidebar.file_uploader("연간계획 엑셀 업로드", type=['xlsx'], key="u1")
     
-    # [수정] 기본 파일을 Tab 2와 동일한 '공급량(계획_실적).xlsx'로 변경
+    # [수정] 기본 파일을 Tab 2와 동일한 '공급량(계획_실적).xlsx'로 우선 변경
     DEFAULT_FILE = "공급량(계획_실적).xlsx"
 
     if uploaded:
@@ -183,13 +210,13 @@ def run_tab1_management():
                     st.session_state.data_tab1 = df
                     st.sidebar.info(f"ℹ️ 기본 파일 사용 ({DEFAULT_FILE})")
             else:
-                # 파일이 없을 경우 기존 파일명으로 fallback 시도 (혹시 모르니)
-                fallback = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
-                if fallback.exists():
-                    df, err = load_excel_tab1(fallback)
+                # 없으면 2순위
+                path2 = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
+                if path2.exists():
+                    df, err = load_excel_tab1(path2)
                     if not err:
                         st.session_state.data_tab1 = df
-                        st.sidebar.info(f"ℹ️ 기본 파일 사용 ({fallback.name})")
+                        st.sidebar.info(f"ℹ️ 기본 파일 사용 ({path2.name})")
                 else:
                     st.sidebar.warning(f"기본 파일({DEFAULT_FILE})이 없습니다.")
         except:
@@ -204,10 +231,13 @@ def run_tab1_management():
 
     st.title("🔥 도시가스 공급실적 관리")
 
-    # [수정] 날짜 선택기의 디폴트 값을 데이터의 최신 날짜(MAX)로 설정
+    # [수정] 날짜 선택기의 디폴트 값 = 데이터가 있는 가장 최신 날짜
     col_date, col_space = st.columns([1, 5])
     with col_date:
-        default_date = df['날짜'].max()
+        # 실적(GJ)이 0보다 큰 데이터 중 가장 최근 날짜 찾기
+        valid_dates = df[df['실적(GJ)'] > 0]['날짜']
+        default_date = valid_dates.max() if not valid_dates.empty else df['날짜'].min()
+        
         selected_date = st.date_input("조회 기준일", value=default_date, label_visibility="collapsed")
     target_date = pd.to_datetime(selected_date)
 
@@ -236,7 +266,7 @@ def run_tab1_management():
 
     # 2. KPI 산출
     metrics = calc_kpi(df, target_date)
-    current_val_gj = metrics['Day']['gj']['a'] 
+    current_val_gj = metrics['Day']['gj']['a'] # 현재 화면에 표시될 일간 실적
 
     # 3. 랭킹 실시간 계산
     rank_text = ""
@@ -308,7 +338,11 @@ def run_tab1_management():
         df.update(edited_gj)
         # 2. 세션 상태 업데이트 (가장 중요)
         st.session_state.data_tab1 = df
-        # 3. 페이지 리런 -> 위쪽의 calc_kpi와 get_historical_ranks가 갱신된 값으로 다시 실행됨
+        
+        # 3. Tab 2와의 데이터 연동을 위해 임시 저장소에 반영 (옵션)
+        # Tab 1에서 입력한 데이터를 Tab 2에서도 반영하고 싶다면 여기서 처리해야 함
+        # 현재는 Tab 1 내부 랭킹용으로만 즉시 반영
+        
         st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -354,11 +388,6 @@ def run_tab2_analysis():
     def pick_default_year_2026(years: List[int]) -> int:
         if 2026 in years: return 2026
         return years[-1]
-
-    def load_supply_sheets(excel_bytes):
-        xls = pd.ExcelFile(io.BytesIO(excel_bytes), engine="openpyxl")
-        return (xls.parse("월별계획_실적") if "월별계획_실적" in xls.sheet_names else pd.DataFrame(),
-                xls.parse("일별실적") if "일별실적" in xls.sheet_names else pd.DataFrame())
     
     def load_2026_plan_file():
         try:
@@ -404,15 +433,6 @@ def run_tab2_analysis():
         df = df.dropna(subset=["연", "월"])
         df["연"] = df["연"].astype(int)
         df["월"] = df["월"].astype(int)
-        return df
-
-    def clean_supply_day_df(df):
-        if df.empty: return df
-        df = df.copy()
-        df["일자"] = pd.to_datetime(df["일자"], errors="coerce")
-        for c in ["공급량(MJ)", "공급량(M3)", "평균기온(℃)"]:
-            if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-        df = df.dropna(subset=["일자"])
         return df
 
     def render_section_selector_daily(long_df, title, key_prefix):
@@ -695,13 +715,16 @@ def run_tab2_analysis():
     st.title("📊 도시가스 공급량 분석 (일별)")
 
     if supply_bytes:
-        month_df, day_df = load_supply_sheets(supply_bytes)
+        month_df, day_df = load_supply_sheets_common(supply_bytes)
         month_df = clean_supply_month_df(month_df)
-        day_df = clean_supply_day_df(day_df)
+        day_df = clean_supply_day_df_common(day_df)
 
         if month_df.empty or day_df.empty:
             st.error("엑셀 파일에 '월별계획_실적' 또는 '일별실적' 시트가 비어있거나 없습니다.")
         else:
+            # Tab 2에서 로드한 데이터를 Session State에 저장 (Tab 1에서도 사용)
+            st.session_state['supply_day_df'] = day_df
+
             act_col = "실적_공급량(MJ)"
             long_dummy = month_df[["연", "월"]].copy()
             long_dummy["계획/실적"] = "실적"
