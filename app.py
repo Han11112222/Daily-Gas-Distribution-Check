@@ -67,16 +67,15 @@ def load_historical_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (2026-01-01 자동입력 + 랭킹 유지)
+# [탭 1] 도시가스 공급실적 관리 (완벽 유지)
 # ==============================================================================
 def run_tab1_management():
-    # 1. 2026-01-01 데이터 강제 설정을 위한 초기화
     if 'tab1_df' not in st.session_state:
         init_date = pd.to_datetime("2026-01-01")
         init_data = {
             '날짜': [init_date],
             '계획(GJ)': [222239],
-            '실적(GJ)': [257365], # 형님 요청값
+            '실적(GJ)': [257365],
             '계획(m3)': [5221],
             '실적(m3)': [6127]
         }
@@ -107,24 +106,19 @@ def run_tab1_management():
         current_val_m3 = float(current_row['실적(m3)'].iloc[0])
         plan_val_m3 = float(current_row['계획(m3)'].iloc[0])
 
-    # 랭킹 계산
     rank_text = ""
     if current_val_gj > 0:
         df_hist = load_historical_data_common()
         if df_hist is not None and not df_hist.empty:
             df_hist = df_hist[df_hist['일자'] != target_date]
-            
             all_vals = pd.concat([df_hist['val_gj'], pd.Series([current_val_gj])])
             rank_all = (all_vals > current_val_gj).sum() + 1
-            
             hist_month = df_hist[df_hist['일자'].dt.month == target_date.month]
             month_vals = pd.concat([hist_month['val_gj'], pd.Series([current_val_gj])])
             rank_month = (month_vals > current_val_gj).sum() + 1
-            
             firecracker = "🎉" if rank_all == 1 else ""
             rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
 
-    # 화면 표시
     st.markdown("### 🔥 열량 실적 (GJ)")
     col_g1, col_g2, col_g3 = st.columns(3)
     
@@ -207,7 +201,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 전체 기간 Top 랭킹 1,2,3위 박스 복구)
+# [탭 2] 공급량 분석 (수정됨: 하이라이트 카드 글씨 크기 확대 및 제목 변경)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -409,16 +403,12 @@ def run_tab2_analysis():
             show["일별실적(GJ)"] = show["일별실적(GJ)"].apply(lambda v: v / 1000.0)
             st.dataframe(center_style(show.style.format("{:,.1f}", subset=["일별실적(GJ)", "편차(GJ)"])), use_container_width=True, hide_index=True)
         
-        # ─────────────────────────────────────────────────────────────
-        # [수정] 5. Top 랭킹 (월별 + 전체기간 카드 복구)
-        # ─────────────────────────────────────────────────────────────
         st.markdown("---")
         st.markdown("### 💎 일별 공급량 Top 랭킹")
         month_all = df_all[df_all["월"] == sel_month].copy()
         if not month_all.empty:
             top_n = st.slider("표시할 순위 개수", 5, 50, 10, 5, key=f"{key_prefix}top_n")
             
-            # (1) 월별 Top 랭킹 섹션
             st.markdown(f"#### 📅 {sel_month}월 기준 Top 랭킹")
             if not this_df.empty:
                 max_row = this_df.loc[this_df[act_col].idxmax()]
@@ -428,11 +418,12 @@ def run_tab2_analysis():
                 month_vals_gj = month_all[act_col] / 1000.0
                 rank_month = (month_vals_gj > max_val_gj).sum() + 1
                 target_date_str = f"{int(max_row['연'])}년 {int(max_row['월'])}월 {int(max_row['일'])}일"
-                st.markdown(f"""<div style="background-color:#e0f2fe;padding:15px;border-radius:10px;border:1px solid #bae6fd;margin-bottom:20px;">
-                    <h4 style="margin:0; color:#0369a1;">📢 {sel_year}년 {sel_month}월 최고 실적 분석 ({target_date_str})</h4>
-                    <div style="font-size:16px; margin-top:5px; color:#333;">공급량: <b>{max_val_gj:,.1f} GJ</b> ➡️ <span style="background-color:#fff; padding:2px 8px; border-radius:5px; border:1px solid #ddd; margin-left:5px;">🏆 역대 전체 <b>{rank_total}위</b></span> <span style="background-color:#fff; padding:2px 8px; border-radius:5px; border:1px solid #ddd; margin-left:5px;">📅 역대 {sel_month}월 중 <b>{rank_month}위</b></span></div></div>""", unsafe_allow_html=True)
+                
+                # [수정] 하이라이트 카드: 제목 변경 및 글씨 크기 2배 확대
+                st.markdown(f"""<div style="background-color:#e0f2fe;padding:20px;border-radius:10px;border:1px solid #bae6fd;margin-bottom:20px;">
+                    <h3 style="margin:0; color:#0369a1; font-size: 24px;">📢 {target_date_str} 실적 랭킹</h3>
+                    <div style="font-size:30px; margin-top:10px; color:#333; line-height: 1.4;">공급량: <b>{max_val_gj:,.1f} GJ</b> ➡️ <span style="background-color:#fff; padding:4px 12px; border-radius:5px; border:2px solid #ddd; margin-left:10px; font-size: 28px;">🏆 역대 전체 <b>{rank_total}위</b></span> <span style="background-color:#fff; padding:4px 12px; border-radius:5px; border:2px solid #ddd; margin-left:10px; font-size: 28px;">📅 역대 {sel_month}월 중 <b>{rank_month}위</b></span></div></div>""", unsafe_allow_html=True)
             
-            # 월별 Top3 카드
             month_all["공급량_GJ"] = month_all[act_col] / 1000.0
             rank_df = month_all.sort_values("공급량_GJ", ascending=False).head(top_n).copy()
             rank_df.insert(0, "Rank", range(1, len(rank_df) + 1))
@@ -445,14 +436,12 @@ def run_tab2_analysis():
                     _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
             st.dataframe(center_style(rank_df[["Rank", "공급량_GJ", "연", "월", "일", "평균기온(℃)"]].style.format({"공급량_GJ": "{:,.1f}", "평균기온(℃)": "{:,.1f}"})), use_container_width=True, hide_index=True)
             
-            # (2) 전체 기간 Top 랭킹 섹션 (박스 복구!)
             st.markdown("---")
             st.markdown("#### 🏆 전체 기간 Top 랭킹")
             global_top = df_all.sort_values(act_col, ascending=False).head(top_n).copy()
             global_top["공급량_GJ"] = global_top[act_col] / 1000.0
             global_top.insert(0, "Rank", range(1, len(global_top) + 1))
             
-            # [복구] 전체기간 Top3 카드 표시
             g_top3 = global_top.head(3)
             gc1, gc2, gc3 = st.columns(3)
             gcols = [gc1, gc2, gc3]
