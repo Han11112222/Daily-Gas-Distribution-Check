@@ -24,51 +24,9 @@ def set_korean_font():
             pass
 set_korean_font()
 
-# ─────────────────────────────────────────────────────────
-# [공통 함수] 데이터 로드 및 정제
-# ─────────────────────────────────────────────────────────
-def load_historical_data_common():
-    """
-    공급량(계획_실적).xlsx 파일의 '일별실적' 시트를 읽어옵니다.
-    Tab 1(랭킹 계산)과 Tab 2(분석)에서 동일한 데이터를 쓰기 위함입니다.
-    """
-    path = Path(__file__).parent / "공급량(계획_실적).xlsx"
-    if not path.exists():
-        return None
-
-    try:
-        xls = pd.ExcelFile(path, engine="openpyxl")
-        # '일별실적' 시트가 있으면 그걸 쓰고, 없으면 첫번째 시트 사용
-        sheet_name = "일별실적" if "일별실적" in xls.sheet_names else xls.sheet_names[0]
-        df = pd.read_excel(xls, sheet_name=sheet_name)
-        
-        # 컬럼 공백 제거
-        df.columns = [str(c).replace(" ", "").strip() for c in df.columns]
-        
-        # 날짜 컬럼 찾기
-        col_date = next((c for c in df.columns if "일자" in c or "date" in c.lower()), None)
-        # MJ 컬럼 찾기
-        col_mj = next((c for c in df.columns if "공급량" in c and "MJ" in c), None)
-        
-        if not col_date or not col_mj: return None
-
-        df[col_date] = pd.to_datetime(df[col_date], errors='coerce')
-        df = df.dropna(subset=[col_date])
-        
-        # MJ -> GJ 변환 (분석 통일)
-        df['val_gj'] = pd.to_numeric(df[col_mj], errors='coerce') / 1000.0
-        
-        # 유효값만 남김
-        df = df[df['val_gj'] > 0].copy()
-        
-        return df[['val_gj', col_date]].rename(columns={col_date: '일자'})
-        
-    except Exception:
-        return None
-
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리
+# [탭 1] 도시가스 공급실적 관리 (랭킹 오류 완벽 해결)
 # ==============================================================================
 def run_tab1_management():
     # --- 내부 함수 ---
@@ -123,29 +81,58 @@ def run_tab1_management():
 
         return df, None
 
-    # [핵심 수정] Tab 2와 100% 동일한 데이터 소스 사용
-    def get_historical_ranks_unified(current_val_gj, target_date):
-        # 1. 공통 함수로 과거 데이터 로드
-        df_hist = load_historical_data_common()
+    # [핵심 수정] 과거 데이터 로드 및 랭킹 산출 함수 (MJ -> GJ 변환 및 필터 수정)
+    def get_historical_ranks(current_val_gj, target_date):
+        history_file = Path(__file__).parent / "공급량(계획_실적).xlsx"
         
-        if df_hist is None or df_hist.empty:
+        if not history_file.exists():
+            return None 
+
+        try:
+            # 1. 파일 읽기: '일별실적' 시트를 읽어야 정확한 과거 일일 데이터를 가져옵니다.
+            xls = pd.ExcelFile(history_file, engine="openpyxl")
+            target_sheet = "일별실적" if "일별실적" in xls.sheet_names else xls.sheet_names[0]
+            
+            df_hist = pd.read_excel(xls, sheet_name=target_sheet)
+            
+            # 2. 컬럼 정리 (공백 제거)
+            df_hist.columns = [str(c).replace(" ", "").strip() for c in df_hist.columns]
+
+            # 3. 필수 컬럼 찾기
+            col_date = next((c for c in df_hist.columns if "일자" in c or "date" in c.lower()), None)
+            col_mj = next((c for c in df_hist.columns if "공급량" in c and "MJ" in c), None)
+            
+            if not col_date or not col_mj: return None
+
+            # 4. 데이터 정제
+            df_hist[col_date] = pd.to_datetime(df_hist[col_date], errors='coerce')
+            df_hist = df_hist.dropna(subset=[col_date])
+            
+            # [중요] 단위 변환: MJ -> GJ
+            df_hist['val_gj'] = pd.to_numeric(df_hist[col_mj], errors='coerce') / 1000.0
+            
+            # 유효 데이터 필터링 (0보다 큰 값만)
+            # 기존 코드의 < 2000000 필터 제거 (MJ 단위라 큰 숫자가 많음)
+            df_hist = df_hist.dropna(subset=['val_gj'])
+            df_hist = df_hist[df_hist['val_gj'] > 0]
+
+            # 자기 자신 제외
+            df_hist = df_hist[df_hist[col_date] != target_date]
+
+            # 5. 전체 랭킹
+            all_values = pd.concat([df_hist['val_gj'], pd.Series([current_val_gj])])
+            rank_all = (all_values > current_val_gj).sum() + 1
+            
+            # 6. 동월 랭킹
+            hist_month = df_hist[df_hist[col_date].dt.month == target_date.month]
+            month_values = pd.concat([hist_month['val_gj'], pd.Series([current_val_gj])])
+            rank_month = (month_values > current_val_gj).sum() + 1
+            
+            firecracker = "🎉" if rank_all == 1 else ""
+            return f"{firecracker} 🏆 역대 전체: {rank_all}위  /  📅 역대 {target_date.month}월: {rank_month}위"
+            
+        except Exception as e:
             return None
-
-        # 2. 중복 방지: 이미 파일에 저장된 '오늘 날짜' 데이터는 제외 (입력값으로 대체)
-        df_hist = df_hist[df_hist['일자'] != target_date]
-
-        # 3. 랭킹 계산 (과거 데이터 + 현재 입력값)
-        # 역대 전체
-        all_vals = pd.concat([df_hist['val_gj'], pd.Series([current_val_gj])])
-        rank_all = (all_vals > current_val_gj).sum() + 1
-        
-        # 역대 동월
-        month_vals = df_hist.loc[df_hist['일자'].dt.month == target_date.month, 'val_gj']
-        month_vals = pd.concat([month_vals, pd.Series([current_val_gj])])
-        rank_month = (month_vals > current_val_gj).sum() + 1
-        
-        firecracker = "🎉" if rank_all == 1 else ""
-        return f"{firecracker} 🏆 역대 전체: {rank_all}위  /  📅 역대 {target_date.month}월: {rank_month}위"
 
     if 'data_tab1' not in st.session_state:
         st.session_state.data_tab1 = None
@@ -217,7 +204,7 @@ def run_tab1_management():
     # 3. 랭킹 실시간 계산
     rank_text = ""
     if current_val_gj > 0:
-        rank_info = get_historical_ranks_unified(current_val_gj, target_date)
+        rank_info = get_historical_ranks(current_val_gj, target_date)
         if rank_info:
             rank_text = rank_info
 
@@ -230,7 +217,7 @@ def run_tab1_management():
         st.metric(label=f"일간 달성률 {m['rate']:.1f}%", value=f"{int(m['a']):,} GJ", delta=f"{int(m['diff']):+,} GJ")
         st.caption(f"계획: {int(m['p']):,} GJ")
         
-        # 랭킹 표시
+        # 랭킹 표시 (값이 있을 때만)
         if rank_text:
             st.info(rank_text)
 
@@ -529,13 +516,10 @@ def run_tab2_analysis():
             line_color = "#3B82F6" if y == prev_year else pastel_colors[idx % len(pastel_colors)]
             line_width = 3 if y == prev_year else 1.5
             op_mode = "lines+markers" if y == prev_year else "lines"
-            
-            # [수정] hovertemplate 추가
             fig1.add_scatter(x=sub["일"], y=sub[act_col] / 1000.0, mode=op_mode, name=f"{y}년 {sel_month}월 실적", line=dict(color=line_color, width=line_width), hovertemplate="%{y:,.0f} GJ<extra></extra>")
             
         # (3) 당년도 실적 (입력된 데이터 포함)
         if not this_df.empty: 
-            # [수정] hovertemplate 추가
             fig1.add_scatter(x=this_df["일"], y=this_df[act_col] / 1000.0, mode="lines+markers", name=f"{sel_year}년 {sel_month}월 실적", line=dict(color="black", width=4), hovertemplate="%{y:,.0f} GJ<extra></extra>")
         
         fig1.update_layout(title=f"{sel_year}년 {sel_month}월 일별 공급량 패턴", xaxis_title="일", yaxis_title="공급량 (GJ)", margin=dict(l=10, r=10, t=50, b=10))
@@ -549,7 +533,6 @@ def run_tab2_analysis():
             merged['편차_GJ'] = (merged[act_col] / 1000.0) - merged['plan_gj']
             
             fig2 = go.Figure()
-            # [수정] hovertemplate 추가
             fig2.add_bar(x=merged["일"], y=merged["편차_GJ"], name="편차", marker_color="#FF4B4B", hovertemplate="%{y:,.0f} GJ<extra></extra>")
             fig2.update_layout(title=f"계획 대비 편차 (실적-계획)", xaxis_title="일", yaxis_title="편차 (GJ)", margin=dict(l=10, r=10, t=40, b=10))
             st.plotly_chart(fig2, use_container_width=True)
