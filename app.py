@@ -13,17 +13,24 @@ from typing import Dict, List, Optional, Tuple
 # ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="도시가스 통합 관리 시스템", layout="wide")
 
-# [수정 1] 매트릭스(지표) 박스 높이 2배 확대 및 스타일 적용 CSS
+# [스타일] 매트릭스 박스 높이 2배 확대 (Han형님 요청 반영)
 st.markdown("""
     <style>
     div[data-testid="stMetric"] {
         background-color: #F0F2F6;
         border-radius: 10px;
         padding: 15px;
-        min-height: 200px; /* 높이를 200px로 강제 설정 (기존의 약 2배) */
+        min-height: 200px;
         display: flex;
         flex-direction: column;
         justify-content: center;
+    }
+    /* 랭킹 텍스트 강조 스타일 */
+    .rank-highlight {
+        color: #FF4B4B;
+        font-weight: bold;
+        font-size: 1.1em;
+        margin-top: 5px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -40,30 +47,22 @@ def set_korean_font():
 set_korean_font()
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수] 데이터 로드 및 정제 (Tab 1 랭킹 계산용)
+# [공통 함수] 데이터 로드 및 정제
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_historical_data_common():
-    """
-    공급량(계획_실적).xlsx 파일의 '일별실적' 시트를 읽어옵니다.
-    Tab 1(랭킹 계산)과 Tab 2(분석)에서 동일한 데이터를 쓰기 위함입니다.
-    """
     path = Path(__file__).parent / "공급량(계획_실적).xlsx"
     if not path.exists():
         return None
 
     try:
         xls = pd.ExcelFile(path, engine="openpyxl")
-        # '일별실적' 시트가 있으면 그걸 쓰고, 없으면 첫번째 시트 사용
         sheet_name = "일별실적" if "일별실적" in xls.sheet_names else xls.sheet_names[0]
         df = pd.read_excel(xls, sheet_name=sheet_name)
         
-        # 컬럼 공백 제거
         df.columns = [str(c).replace(" ", "").strip() for c in df.columns]
         
-        # 날짜 컬럼 찾기
         col_date = next((c for c in df.columns if "일자" in c or "date" in c.lower()), None)
-        # MJ 컬럼 찾기
         col_mj = next((c for c in df.columns if "공급량" in c and "MJ" in c), None)
         
         if not col_date or not col_mj: return None
@@ -71,10 +70,7 @@ def load_historical_data_common():
         df[col_date] = pd.to_datetime(df[col_date], errors='coerce')
         df = df.dropna(subset=[col_date])
         
-        # MJ -> GJ 변환 (분석 통일)
         df['val_gj'] = pd.to_numeric(df[col_mj], errors='coerce') / 1000.0
-        
-        # 유효값만 남김
         df = df[df['val_gj'] > 0].copy()
         
         return df[['val_gj', col_date]].rename(columns={col_date: '일자'})
@@ -84,7 +80,7 @@ def load_historical_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (Han형님이 만족하신 v4 버전)
+# [탭 1] 도시가스 공급실적 관리 (수정됨: 최신 실적 배너 추가)
 # ==============================================================================
 def run_tab1_management():
     # --- 내부 함수 ---
@@ -139,18 +135,14 @@ def run_tab1_management():
 
         return df, None
 
-    # [핵심] Tab 2와 100% 동일한 데이터 소스 사용
     def get_historical_ranks_unified(current_val_gj, target_date):
-        # 1. 공통 함수로 과거 데이터 로드
         df_hist = load_historical_data_common()
-        
         if df_hist is None or df_hist.empty:
             return None
 
-        # 2. 중복 방지: 이미 파일에 저장된 '오늘 날짜' 데이터는 제외 (입력값으로 대체)
+        # 중복 방지 (오늘 날짜 제외)
         df_hist = df_hist[df_hist['일자'] != target_date]
 
-        # 3. 랭킹 계산 (과거 데이터 + 현재 입력값)
         # 역대 전체
         all_vals = pd.concat([df_hist['val_gj'], pd.Series([current_val_gj])])
         rank_all = (all_vals > current_val_gj).sum() + 1
@@ -161,8 +153,9 @@ def run_tab1_management():
         rank_month = (month_vals > current_val_gj).sum() + 1
         
         firecracker = "🎉" if rank_all == 1 else ""
-        return f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
+        return f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  |  📅 역대 {target_date.month}월 중: {int(rank_month)}위"
 
+    # --- 메인 로직 시작 ---
     if 'data_tab1' not in st.session_state:
         st.session_state.data_tab1 = None
 
@@ -193,16 +186,47 @@ def run_tab1_management():
         st.warning("👈 좌측 사이드바에서 엑셀 파일을 업로드해주세요.")
         return
 
-    # 세션에 저장된 데이터프레임을 가져옵니다.
     df = st.session_state.data_tab1
 
     st.title("🔥 도시가스 공급실적 관리")
 
-    # [수정] 날짜 선택기의 디폴트 값을 데이터의 최신 날짜(MAX)로 설정
+    # --------------------------------------------------------------------------
+    # [수정 포인트] 가장 최신 공급량(>0)을 찾아서 배너로 표시 & 기본 날짜 설정
+    # --------------------------------------------------------------------------
+    # 실적(GJ)이 0보다 큰 데이터 중 가장 최신 날짜 찾기
+    latest_valid_row = df[df['실적(GJ)'] > 0].sort_values('날짜', ascending=False).head(1)
+    
+    default_date = df['날짜'].min()
+    banner_html = "" # 배너용 HTML
+
+    if not latest_valid_row.empty:
+        l_date = latest_valid_row['날짜'].iloc[0]
+        l_val = latest_valid_row['실적(GJ)'].iloc[0]
+        default_date = l_date # 조회 기준일을 최신 실적일로 자동 설정
+        
+        # 랭킹 계산
+        l_rank_text = get_historical_ranks_unified(l_val, l_date)
+        if l_rank_text is None: l_rank_text = ""
+        
+        # 상단 배너 표시 (Han형님 요청 사항: 최신 날짜, 양, 랭킹 표시)
+        st.markdown(f"""
+        <div style="background-color:#fff3cd; padding:15px; border-radius:10px; border-left: 5px solid #ffc107; margin-bottom: 20px;">
+            <h4 style="margin:0; color:#856404;">📢 최신 공급 업데이트 ({l_date.strftime('%Y-%m-%d')})</h4>
+            <div style="margin-top:5px; font-size:16px;">
+                🔥 공급량: <strong>{l_val:,.0f} GJ</strong> &nbsp;&nbsp; 
+                <span style="color:#d9534f; font-weight:bold;">{l_rank_text}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("데이터에 입력된 실적(>0)이 아직 없습니다.")
+        default_date = df['날짜'].max()
+
+    # --------------------------------------------------------------------------
+
+    # 날짜 선택기 (default_date를 위에서 찾은 최신 날짜로 설정)
     col_date, col_space = st.columns([1, 5])
     with col_date:
-        valid_dates = df[df['실적(GJ)'] > 0]['날짜']
-        default_date = valid_dates.max() if not valid_dates.empty else df['날짜'].min()
         selected_date = st.date_input("조회 기준일", value=default_date, label_visibility="collapsed")
     target_date = pd.to_datetime(selected_date)
 
@@ -229,11 +253,11 @@ def run_tab1_management():
             }
         return res
 
-    # 2. KPI 산출
+    # 2. KPI 산출 (선택된 날짜 기준)
     metrics = calc_kpi(df, target_date)
-    current_val_gj = metrics['Day']['gj']['a'] # 현재 화면에 표시될 일간 실적
+    current_val_gj = metrics['Day']['gj']['a'] 
 
-    # 3. 랭킹 실시간 계산
+    # 3. 랭킹 실시간 계산 (선택된 날짜 기준)
     rank_text = ""
     if current_val_gj > 0:
         rank_info = get_historical_ranks_unified(current_val_gj, target_date)
@@ -247,9 +271,9 @@ def run_tab1_management():
     with col_g1:
         m = metrics['Day']['gj']
         st.metric(label=f"일간 달성률 {m['rate']:.1f}%", value=f"{int(m['a']):,} GJ", delta=f"{int(m['diff']):+,} GJ")
-        # [수정 2] 랭킹 표시를 빨간색 볼드체로 강조 (st.info 대체)
+        # [수정] 랭킹 표시 강조
         if rank_text:
-            st.markdown(f":red[**{rank_text}**]")
+            st.markdown(f"<div class='rank-highlight'>{rank_text}</div>", unsafe_allow_html=True)
         st.caption(f"계획: {int(m['p']):,} GJ")
         
     with col_g2:
@@ -296,13 +320,9 @@ def run_tab1_management():
         hide_index=True, use_container_width=True, key="editor_gj"
     )
     
-    # [데이터 수정 감지 로직]
     if not edited_gj.equals(view_gj):
-        # 1. 수정된 데이터프레임으로 원본 업데이트
         df.update(edited_gj)
-        # 2. 세션 상태 업데이트 (가장 중요)
         st.session_state.data_tab1 = df
-        # 3. 페이지 리런
         st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -337,7 +357,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (형님이 주신 코드 그대로 적용 - 들여쓰기 수정 완료)
+# [탭 2] 공급량 분석 (기존 코드 유지)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
