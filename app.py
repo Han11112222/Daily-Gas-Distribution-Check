@@ -25,232 +25,178 @@ def set_korean_font():
 set_korean_font()
 
 # ─────────────────────────────────────────────────────────
-# [공통] 데이터 로드 및 정제 함수
+# [공통] Tab 1용 데이터 로드 및 정제 함수 (v4 버전 유지)
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
-def load_repo_file():
-    """레포지토리의 기본 파일(공급량(계획_실적).xlsx)을 로드"""
+def load_common_data():
+    """
+    Tab 1에서 사용할 '공급량(계획_실적).xlsx' 데이터를 로드합니다.
+    """
     path = Path(__file__).parent / "공급량(계획_실적).xlsx"
-    if path.exists():
-        return path
-    return None
+    if not path.exists():
+        return pd.DataFrame(), pd.DataFrame()
 
-def process_repo_data_for_tab1(file_path):
-    """
-    Tab 2용 파일(월별/일별 시트)을 읽어서 Tab 1용 포맷(일별 계획/실적 합본)으로 변환
-    """
     try:
-        xls = pd.ExcelFile(file_path, engine="openpyxl")
+        xls = pd.ExcelFile(path, engine="openpyxl")
         
-        # 1. 일별 실적 로드
-        sheet_d = next((s for s in xls.sheet_names if "일별" in s), None)
-        df_d = pd.read_excel(xls, sheet_name=sheet_d) if sheet_d else pd.DataFrame()
-        
-        # 2. 월별 계획 로드
+        # 1. 월별 데이터 로드
         sheet_m = next((s for s in xls.sheet_names if "월별" in s), None)
-        df_m = pd.read_excel(xls, sheet_name=sheet_m) if sheet_m else pd.DataFrame()
-
-        # 3. 데이터 가공
-        if df_d.empty: return None
-
-        # 컬럼 공백 제거
-        df_d.columns = [str(c).replace(" ", "").strip() for c in df_d.columns]
-        df_m.columns = [str(c).replace(" ", "").strip() for c in df_m.columns]
-
-        # 일별 데이터 정리
-        col_date = next((c for c in df_d.columns if "일자" in c or "date" in c.lower()), None)
-        col_mj_act = next((c for c in df_d.columns if "공급량" in c and "MJ" in c), None)
-        col_m3_act = next((c for c in df_d.columns if "공급량" in c and "M3" in c), None)
-
-        if not col_date: return None
-
-        df_d = df_d.rename(columns={col_date: '날짜'})
-        df_d['날짜'] = pd.to_datetime(df_d['날짜'], errors='coerce')
-        df_d = df_d.dropna(subset=['날짜'])
+        month_df = pd.read_excel(xls, sheet_name=sheet_m) if sheet_m else pd.DataFrame()
         
-        # 실적(MJ -> GJ 변환)
-        if col_mj_act:
-            df_d['실적(GJ)'] = (pd.to_numeric(df_d[col_mj_act], errors='coerce').fillna(0) / 1000).round(0)
-        else:
-            df_d['실적(GJ)'] = 0
+        # 2. 일별 데이터 로드
+        sheet_d = next((s for s in xls.sheet_names if "일별" in s), xls.sheet_names[0])
+        day_df = pd.read_excel(xls, sheet_name=sheet_d)
+        
+        # 3. 데이터 정제
+        if not day_df.empty:
+            day_df.columns = [str(c).replace(" ", "").strip() for c in day_df.columns]
+            col_date = next((c for c in day_df.columns if "일자" in c or "date" in c.lower()), None)
             
-        if col_m3_act:
-            df_d['실적(m3)'] = pd.to_numeric(df_d[col_m3_act], errors='coerce').fillna(0)
-        else:
-            df_d['실적(m3)'] = 0
+            if col_date:
+                day_df[col_date] = pd.to_datetime(day_df[col_date], errors="coerce")
+                day_df = day_df.dropna(subset=[col_date])
+                
+                rename_map = {col_date: '일자'}
+                col_mj = next((c for c in day_df.columns if "공급량" in c and "MJ" in c), None)
+                if col_mj: rename_map[col_mj] = '공급량(MJ)'
+                
+                for c in day_df.columns:
+                    if "공급량" in c or "기온" in c:
+                        day_df[c] = pd.to_numeric(day_df[c], errors='coerce').fillna(0)
+                
+                day_df = day_df.rename(columns=rename_map)
+                
+                day_df["연"] = day_df["일자"].dt.year
+                day_df["월"] = day_df["일자"].dt.month
+                day_df["일"] = day_df["일자"].dt.day
 
-        # 월별 계획을 일별로 배분 (단순 배분)
-        # 월별 시트에서 연, 월, 계획MJ 컬럼 찾기
-        col_y = next((c for c in df_m.columns if "연" in c), None)
-        col_m = next((c for c in df_m.columns if "월" in c), None)
-        col_mj_plan = next((c for c in df_m.columns if "계획" in c and "MJ" in c), None) # 첫번째 계획 컬럼 사용
-
-        plan_map = {}
-        if col_y and col_m and col_mj_plan:
-            for _, row in df_m.iterrows():
-                try:
-                    y, m = int(row[col_y]), int(row[col_m])
-                    plan_val = float(row[col_mj_plan])
-                    if pd.notna(plan_val):
-                        # 해당 월의 일수 계산
-                        days_in_month = pd.Timestamp(y, m, 1).days_in_month
-                        daily_plan_gj = (plan_val / 1000 / days_in_month)
-                        plan_map[(y, m)] = daily_plan_gj
-                except:
-                    continue
-
-        # 일별 데이터에 계획 매핑
-        df_d['계획(GJ)'] = df_d.apply(lambda r: plan_map.get((r['날짜'].year, r['날짜'].month), 0), axis=1).round(0)
-        df_d['계획(m3)'] = 0 # m3 계획은 복잡하므로 일단 0
-
-        return df_d[['날짜', '계획(GJ)', '실적(GJ)', '계획(m3)', '실적(m3)']]
+        if not month_df.empty:
+             month_df.columns = [str(c).replace(" ", "").strip() for c in month_df.columns]
+             col_y = next((c for c in month_df.columns if "연" in c), None)
+             col_m = next((c for c in month_df.columns if "월" in c), None)
+             if col_y and col_m:
+                 month_df = month_df.rename(columns={col_y: '연', col_m: '월'})
+        
+        return month_df, day_df
 
     except Exception:
-        return None
+        return pd.DataFrame(), pd.DataFrame()
 
-# ─────────────────────────────────────────────────────────
-# [탭 1] 도시가스 공급실적 관리
-# ─────────────────────────────────────────────────────────
+
+# ==============================================================================
+# [탭 1] 도시가스 공급실적 관리 (방금 드린 v4 코드 - 형님이 만족하신 버전)
+# ==============================================================================
 def run_tab1_management():
-    # --- 1. 데이터 로드 ---
-    if 'data_tab1' not in st.session_state:
-        st.session_state.data_tab1 = None
-
-    st.sidebar.header("📂 [관리] 데이터 파일")
-    uploaded = st.sidebar.file_uploader("관리용 엑셀 업로드", type=['xlsx'], key="u1")
-    
-    # 1순위: 업로드 파일
-    if uploaded:
-        try:
-            # 업로드된 파일이 '연간' 시트 포맷인지, '공급량(계획_실적)' 포맷인지 확인 필요
-            # 여기서는 편의상 공급량 포맷으로 처리 시도 후 실패하면 연간 포맷 시도
-            df = process_repo_data_for_tab1(uploaded)
-            if df is None:
-                # 기존 방식 (연간 시트) 시도
-                raw = pd.read_excel(uploaded, sheet_name='연간', header=None)
-                # (기존 로딩 로직 생략 - 필요시 복원 가능, 지금은 통합 위주)
-                # 간단하게 처리
-                pass 
+    # 1. 데이터 로드 (초기화)
+    if 'tab1_df' not in st.session_state:
+        _, day_df = load_common_data()
+        
+        if not day_df.empty:
+            # Tab 1용 포맷으로 변환
+            manage_df = day_df.copy()
+            manage_df = manage_df.rename(columns={'일자': '날짜'})
             
-            if df is not None:
-                st.session_state.data_tab1 = df
-                st.sidebar.success("✅ 파일 로드 성공")
-        except:
-            st.sidebar.error("파일 로드 실패")
-
-    # 2순위: 기본 파일 (공급량(계획_실적).xlsx)
-    elif st.session_state.data_tab1 is None:
-        repo_file = load_repo_file()
-        if repo_file:
-            df = process_repo_data_for_tab1(repo_file)
-            if df is not None:
-                st.session_state.data_tab1 = df
-                st.sidebar.info(f"ℹ️ 기본 파일 사용 (공급량(계획_실적).xlsx)")
+            # 실적(GJ) 생성 (MJ -> GJ)
+            if '공급량(MJ)' in manage_df.columns:
+                manage_df['실적(GJ)'] = (manage_df['공급량(MJ)'] / 1000).round(0)
             else:
-                st.sidebar.warning("기본 파일 형식 변환 실패")
+                manage_df['실적(GJ)'] = 0
+            
+            # 계획(GJ) 등 나머지 컬럼이 없다면 생성
+            for c in ['계획(GJ)', '계획(m3)', '실적(m3)']:
+                if c not in manage_df.columns: manage_df[c] = 0
+                
+            st.session_state.tab1_df = manage_df[['날짜', '계획(GJ)', '실적(GJ)', '계획(m3)', '실적(m3)']]
         else:
-            st.sidebar.warning("기본 파일이 없습니다.")
+            st.session_state.tab1_df = pd.DataFrame(columns=['날짜', '계획(GJ)', '실적(GJ)', '계획(m3)', '실적(m3)'])
 
-    if st.session_state.data_tab1 is None:
-        st.warning("👈 좌측 사이드바에서 엑셀 파일을 업로드해주세요.")
-        return
+    df = st.session_state.tab1_df
 
-    df = st.session_state.data_tab1
-
+    # 사이드바
+    st.sidebar.header("📂 [관리] 데이터 파일")
+    st.sidebar.info("기본적으로 '공급량(계획_실적).xlsx' 파일을 사용합니다.")
+    
     st.title("🔥 도시가스 공급실적 관리")
 
-    # --- 2. 날짜 선택 ---
-    col_date, col_space = st.columns([1, 5])
+    # 2. 날짜 선택 (디폴트: 최신 데이터 날짜)
+    col_date, _ = st.columns([1, 4])
     with col_date:
-        # 데이터가 있는 가장 최신 날짜 찾기
-        valid_dates = df[df['실적(GJ)'] > 0]['날짜']
-        default_date = valid_dates.max() if not valid_dates.empty else df['날짜'].min()
-        selected_date = st.date_input("조회 기준일", value=default_date, label_visibility="collapsed")
+        if not df.empty:
+            valid_dates = df[df['실적(GJ)'] > 0]['날짜']
+            default_date = valid_dates.max() if not valid_dates.empty else df['날짜'].max()
+        else:
+            default_date = pd.Timestamp.today()
+            
+        selected_date = st.date_input("조회 기준일", value=default_date)
     target_date = pd.to_datetime(selected_date)
 
-    # --- 3. 랭킹 계산 (Tab 2 데이터와 비교) ---
-    def get_historical_ranks(current_val, target_dt):
-        repo_file = load_repo_file()
-        if not repo_file: return None
-        try:
-            # 원본 데이터 로드 (전체 과거 데이터)
-            df_hist = process_repo_data_for_tab1(repo_file)
-            if df_hist is None: return None
-            
-            # 자기 자신(오늘 날짜) 제외
-            df_hist = df_hist[df_hist['날짜'] != target_dt]
-            
-            # 0보다 큰 값만
-            vals_all = df_hist[df_hist['실적(GJ)'] > 0]['실적(GJ)']
-            
-            # 전체 랭킹
-            rank_all = (vals_all > current_val).sum() + 1
-            
-            # 동월 랭킹
-            vals_month = df_hist[(df_hist['날짜'].dt.month == target_dt.month) & (df_hist['실적(GJ)'] > 0)]['실적(GJ)']
-            rank_month = (vals_month > current_val).sum() + 1
-            
-            firecracker = "🎉" if rank_all == 1 else ""
-            return f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_dt.month}월: {int(rank_month)}위"
-        except:
-            return None
-
-    # --- 4. KPI 계산 ---
+    # 3. KPI 및 랭킹 계산
     mask_day = df['날짜'] == target_date
-    if not mask_day.any():
-        # 데이터 없으면 행 추가
+    current_row = df[mask_day]
+    
+    if current_row.empty:
         new_row = pd.DataFrame({'날짜': [target_date], '계획(GJ)': [0], '실적(GJ)': [0], '계획(m3)': [0], '실적(m3)': [0]})
         df = pd.concat([df, new_row], ignore_index=True)
-        st.session_state.data_tab1 = df
-    
-    curr_row = df.loc[df['날짜'] == target_date].iloc[0]
-    curr_gj = float(curr_row['실적(GJ)'])
-    plan_gj = float(curr_row['계획(GJ)'])
-    
-    # 랭킹 텍스트
-    rank_text = ""
-    if curr_gj > 0:
-        rt = get_historical_ranks(curr_gj, target_date)
-        if rt: rank_text = rt
+        st.session_state.tab1_df = df
+        current_row = df[df['날짜'] == target_date]
 
-    # --- 5. 화면 표시 ---
+    current_val_gj = float(current_row['실적(GJ)'].iloc[0])
+    plan_val_gj = float(current_row['계획(GJ)'].iloc[0])
+    
+    # 랭킹 계산 (Tab 2 데이터 소스 기반)
+    rank_text = ""
+    if current_val_gj > 0:
+        _, hist_day_df = load_common_data()
+        if not hist_day_df.empty:
+            hist_day_df['val_gj'] = hist_day_df['공급량(MJ)'] / 1000.0
+            valid_hist = hist_day_df[hist_day_df['val_gj'] > 0]
+            valid_hist = valid_hist[valid_hist['일자'] != target_date]
+            
+            all_vals = pd.concat([valid_hist['val_gj'], pd.Series([current_val_gj])])
+            rank_all = (all_vals > current_val_gj).sum() + 1
+            
+            hist_month = valid_hist[valid_hist['일자'].dt.month == target_date.month]
+            month_vals = pd.concat([hist_month['val_gj'], pd.Series([current_val_gj])])
+            rank_month = (month_vals > current_val_gj).sum() + 1
+            
+            firecracker = "🎉" if rank_all == 1 else ""
+            rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
+
+    # 4. 화면 표시
     st.markdown("### 🔥 열량 실적 (GJ)")
     col_g1, col_g2, col_g3 = st.columns(3)
     
-    # 누적 계산
     mask_mtd = (df['날짜'] <= target_date) & (df['날짜'].dt.month == target_date.month) & (df['날짜'].dt.year == target_date.year)
     mask_ytd = (df['날짜'] <= target_date) & (df['날짜'].dt.year == target_date.year)
-    
+    mtd_data = df[mask_mtd]
+    ytd_data = df[mask_ytd]
+
     with col_g1:
-        rate = (curr_gj / plan_gj * 100) if plan_gj > 0 else 0
-        st.metric(label=f"일간 달성률 {rate:.1f}%", value=f"{int(curr_gj):,} GJ", delta=f"{int(curr_gj - plan_gj):+,} GJ")
-        st.caption(f"계획: {int(plan_gj):,} GJ")
+        diff_gj = current_val_gj - plan_val_gj
+        rate_gj = (current_val_gj / plan_val_gj * 100) if plan_val_gj > 0 else 0
+        st.metric(label=f"일간 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
+        st.caption(f"계획: {int(plan_val_gj):,} GJ")
         if rank_text: st.info(rank_text)
 
     with col_g2:
-        d_mtd = df[mask_mtd]
-        a_mtd = d_mtd['실적(GJ)'].sum()
-        p_mtd = d_mtd['계획(GJ)'].sum()
-        rate_mtd = (a_mtd / p_mtd * 100) if p_mtd > 0 else 0
-        st.metric(label=f"월간 누적 달성률 {rate_mtd:.1f}%", value=f"{int(a_mtd):,} GJ", delta=f"{int(a_mtd - p_mtd):+,} GJ")
+        p_mtd = mtd_data['계획(GJ)'].sum()
+        a_mtd = mtd_data['실적(GJ)'].sum()
+        st.metric(label=f"월간 누적 달성률 {(a_mtd/p_mtd*100 if p_mtd>0 else 0):.1f}%", value=f"{int(a_mtd):,} GJ", delta=f"{int(a_mtd-p_mtd):+,} GJ")
         st.caption(f"누적 계획: {int(p_mtd):,} GJ")
 
     with col_g3:
-        d_ytd = df[mask_ytd]
-        a_ytd = d_ytd['실적(GJ)'].sum()
-        p_ytd = d_ytd['계획(GJ)'].sum()
-        rate_ytd = (a_ytd / p_ytd * 100) if p_ytd > 0 else 0
-        st.metric(label=f"연간 누적 달성률 {rate_ytd:.1f}%", value=f"{int(a_ytd):,} GJ", delta=f"{int(a_ytd - p_ytd):+,} GJ")
+        p_ytd = ytd_data['계획(GJ)'].sum()
+        a_ytd = ytd_data['실적(GJ)'].sum()
+        st.metric(label=f"연간 누적 달성률 {(a_ytd/p_ytd*100 if p_ytd>0 else 0):.1f}%", value=f"{int(a_ytd):,} GJ", delta=f"{int(a_ytd-p_ytd):+,} GJ")
         st.caption(f"누적 계획: {int(p_ytd):,} GJ")
 
     st.markdown("---")
     st.markdown("### 💧 부피 실적 (천 m³)")
-    # (부피 부분은 형님 코드 유지 - 간단하게 표시)
-    curr_m3 = float(curr_row['실적(m3)']) / 1000
-    plan_m3 = float(curr_row['계획(m3)']) / 1000
+    current_val_m3 = float(current_row['실적(m3)'].iloc[0]) / 1000
+    plan_val_m3 = float(current_row['계획(m3)'].iloc[0]) / 1000
     col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
-        st.metric(label="일간 실적", value=f"{int(curr_m3):,} (천 m³)", delta=f"{int(curr_m3 - plan_m3):+,}")
+        st.metric(label="일간 실적", value=f"{int(current_val_m3):,} (천 m³)", delta=f"{int(current_val_m3 - plan_val_m3):+,}")
     with col_m2:
         a_mtd_m3 = df[mask_mtd]['실적(m3)'].sum() / 1000
         st.metric(label="월간 누적", value=f"{int(a_mtd_m3):,} (천 m³)")
@@ -262,10 +208,10 @@ def run_tab1_management():
     st.subheader(f"📝 {target_date.month}월 실적 입력")
     st.info("💡 값을 수정하고 엔터(Enter)를 치면 상단 그래프와 랭킹이 즉시 업데이트됩니다.")
 
-    # --- 6. 에디터 ---
+    # 5. 데이터 입력
     mask_month_view = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
     view_df = df.loc[mask_month_view].copy()
-
+    
     st.markdown("##### 1️⃣ 열량(GJ) 입력")
     edited_gj = st.data_editor(
         view_df[['날짜', '계획(GJ)', '실적(GJ)']],
@@ -279,16 +225,15 @@ def run_tab1_management():
 
     if not edited_gj.equals(view_df[['날짜', '계획(GJ)', '실적(GJ)']]):
         df.update(edited_gj)
-        st.session_state.data_tab1 = df
+        st.session_state.tab1_df = df
         st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("##### 2️⃣ 부피(천 m³) 입력")
     view_m3 = view_df[['날짜', '계획(m3)', '실적(m3)']].copy()
-    # 표시용으로 천 단위 변환
     view_m3['계획(천m3)'] = (view_m3['계획(m3)'] / 1000).round(0).astype(int)
     view_m3['실적(천m3)'] = (view_m3['실적(m3)'] / 1000).round(0).astype(int)
-
+    
     edited_m3 = st.data_editor(
         view_m3[['날짜', '계획(천m3)', '실적(천m3)']],
         column_config={
@@ -302,9 +247,9 @@ def run_tab1_management():
     if not edited_m3.equals(view_m3[['날짜', '계획(천m3)', '실적(천m3)']]):
         new_vals = edited_m3['실적(천m3)'] * 1000
         df.loc[mask_month_view, '실적(m3)'] = new_vals.values
-        st.session_state.data_tab1 = df
+        st.session_state.tab1_df = df
         st.rerun()
-        
+
     st.markdown("---")
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
@@ -313,7 +258,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (형님이 주신 코드 그대로 유지 + 인덴트/오류 수정)
+# [탭 2] 공급량 분석 (형님이 주신 코드 그대로 적용 - 들여쓰기 및 에러 수정)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -331,8 +276,6 @@ def run_tab2_analysis():
                 xls.parse("일별실적") if "일별실적" in xls.sheet_names else pd.DataFrame())
     
     def load_2026_plan_file():
-        # 이 함수는 Tab 2 내부에서 2026 계획 데이터를 가져오기 위한 것
-        # Tab 1에서 수정된 데이터가 있으면 그걸 우선할 수 있도록 아래 main 로직에서 처리함
         try:
             path = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
             if not path.exists(): return None
@@ -475,22 +418,21 @@ def run_tab2_analysis():
         act_col = "공급량(MJ)"
         if act_col not in day_df.columns: return
         
-        # [데이터 통합] Tab 1에서 입력된 최신 데이터 병합 (중요)
-        if 'data_tab1' in st.session_state and st.session_state.data_tab1 is not None:
-            new_data = st.session_state.data_tab1.copy()
-            # 실적 있는 것만 가져옴
+        # [핵심] Tab 1에서 입력된 최신 데이터 병합
+        if 'tab1_df' in st.session_state and st.session_state.tab1_df is not None:
+            new_data = st.session_state.tab1_df.copy()
             new_data = new_data[new_data['실적(GJ)'] > 0][['날짜', '실적(GJ)']].copy()
             new_data.columns = ['일자', act_col]
-            new_data[act_col] = new_data[act_col] * 1000 # GJ -> MJ로 변환
+            new_data[act_col] = new_data[act_col] * 1000 # GJ -> MJ로 변환해서 합쳐야 함 (day_df가 MJ단위이므로)
             
-            # 병합
+            # 중복 제거 후 병합
             day_df = pd.concat([day_df, new_data]).drop_duplicates(subset=['일자'], keep='last').sort_values('일자')
-            day_df["연"] = day_df["일자"].dt.year
-            day_df["월"] = day_df["일자"].dt.month
-            day_df["일"] = day_df["일자"].dt.day
 
         # 데이터 정리
         df_all = day_df.copy()
+        df_all["연"] = df_all["일자"].dt.year
+        df_all["월"] = df_all["일자"].dt.month
+        df_all["일"] = df_all["일자"].dt.day
         this_df = df_all[(df_all["연"] == sel_year) & (df_all["월"] == sel_month)].copy()
         
         # 2026 일별 계획 데이터 로드
@@ -559,8 +501,8 @@ def run_tab2_analysis():
         if not month_all.empty:
             top_n = st.slider("표시할 순위 개수", 5, 50, 10, 5, key=f"{key_prefix}top_n")
             
-            # [Highlight Card]
             st.markdown(f"#### 📅 {sel_month}월 기준 Top 랭킹")
+            
             if not this_df.empty:
                 max_row = this_df.loc[this_df[act_col].idxmax()]
                 max_val_gj = max_row[act_col] / 1000.0
@@ -577,6 +519,15 @@ def run_tab2_analysis():
             rank_df = month_all.sort_values("공급량_GJ", ascending=False).head(top_n).copy()
             rank_df.insert(0, "Rank", range(1, len(rank_df) + 1))
             
+            top3 = rank_df.head(3)
+            c1, c2, c3 = st.columns(3)
+            cols = [c1, c2, c3]
+            icons, grads = ["🥇", "🥈", "🥉"], ["linear-gradient(120deg,#eff6ff,#fef9c3)", "linear-gradient(120deg,#f9fafb,#e5e7eb)", "linear-gradient(120deg,#fff7ed,#fef9c3)"]
+            
+            for i, (_, row) in enumerate(top3.iterrows()):
+                with cols[i]: 
+                    _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
+            
             st.dataframe(center_style(rank_df[["Rank", "공급량_GJ", "연", "월", "일", "평균기온(℃)"]].style.format({"공급량_GJ": "{:,.1f}", "평균기온(℃)": "{:,.1f}"})), use_container_width=True, hide_index=True)
 
             st.markdown("---")
@@ -584,6 +535,13 @@ def run_tab2_analysis():
             global_top = df_all.sort_values(act_col, ascending=False).head(top_n).copy()
             global_top["공급량_GJ"] = global_top[act_col] / 1000.0
             global_top.insert(0, "Rank", range(1, len(global_top) + 1))
+            g_top3 = global_top.head(3)
+            gc1, gc2, gc3 = st.columns(3)
+            gcols = [gc1, gc2, gc3]
+            for i, (_, row) in enumerate(g_top3.iterrows()):
+                with gcols[i]: 
+                    _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
+                    
             st.dataframe(center_style(global_top[["Rank", "공급량_GJ", "연", "월", "일", "평균기온(℃)"]].style.format({"공급량_GJ": "{:,.1f}", "평균기온(℃)": "{:,.1f}"})), use_container_width=True, hide_index=True)
 
             # 3차 다항식
@@ -594,6 +552,7 @@ def run_tab2_analysis():
             if len(temp_supply) > 4:
                 x = temp_supply["평균기온(℃)"].values
                 y = temp_supply[act_col].values / 1000.0
+                
                 coeffs = np.polyfit(x, y, 3)
                 p = np.poly1d(coeffs)
                 xs = np.linspace(x.min() - 1, x.max() + 1, 150)
@@ -609,20 +568,23 @@ def run_tab2_analysis():
         temperature_supply_band_section(day_df, sel_month, key_prefix + "band_")
 
     st.sidebar.header("📂 [분석] 데이터 파일")
-    st.sidebar.info("기본적으로 '공급량(계획_실적).xlsx' 파일을 사용합니다.")
-    
-    # 파일 업로드 (분석용)
-    uploaded_analysis = st.sidebar.file_uploader("분석용 엑셀 업로드 (선택)", type=['xlsx'], key="u2")
+    DEFAULT_SUPPLY_XLSX = "공급량(계획_실적).xlsx"
+    uploaded_analysis = st.sidebar.file_uploader("공급량 엑셀 업로드", type=['xlsx'], key="u2")
     
     supply_bytes = None
     if uploaded_analysis:
         supply_bytes = uploaded_analysis.getvalue()
         st.sidebar.success("✅ 분석 파일 로드 성공")
     else:
-        # 기본 파일 로드
-        repo_file = load_repo_file()
-        if repo_file:
-            supply_bytes = repo_file.read_bytes()
+        try:
+            path = Path(__file__).parent / DEFAULT_SUPPLY_XLSX
+            if path.exists():
+                supply_bytes = path.read_bytes()
+                st.sidebar.info(f"ℹ️ 기본 분석 파일 사용 ({DEFAULT_SUPPLY_XLSX})")
+            else:
+                st.sidebar.warning(f"기본 분석 파일({DEFAULT_SUPPLY_XLSX})이 없습니다.")
+        except:
+            pass
 
     st.title("📊 도시가스 공급량 분석 (일별)")
 
@@ -632,24 +594,19 @@ def run_tab2_analysis():
         day_df = clean_supply_day_df(day_df)
 
         if month_df.empty or day_df.empty:
-            st.error("데이터 로드 실패: 시트가 없거나 비어있습니다.")
+            st.error("엑셀 파일에 '월별계획_실적' 또는 '일별실적' 시트가 비어있거나 없습니다.")
         else:
             act_col = "실적_공급량(MJ)"
             long_dummy = month_df[["연", "월"]].copy()
             long_dummy["계획/실적"] = "실적"
-            
-            # 값 변환 안전하게 처리
-            if act_col in month_df.columns:
-                long_dummy["값"] = pd.to_numeric(month_df[act_col], errors="coerce")
-            else:
-                long_dummy["값"] = 0
-            
+            long_dummy["값"] = pd.to_numeric(month_df[act_col], errors="coerce")
             long_dummy = long_dummy.dropna(subset=["값"])
+            
             sel_year, sel_month, years_all = render_section_selector_daily(long_dummy, "공급량(일) 기준 선택", "supplyD_base_")
             st.markdown("---")
             supply_daily_main_logic(day_df, month_df, sel_year, sel_month, key_prefix="supplyD_")
     else:
-        st.info("데이터 파일이 없습니다.")
+        st.info("👈 좌측 사이드바에서 '공급량(계획_실적).xlsx' 파일을 업로드해주세요.")
 
 
 # ==============================================================================
