@@ -327,7 +327,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 툴팁 개선 및 줌/드래그 방지)
+# [탭 2] 공급량 분석 (수정됨: dragmode=False로 커서 고정)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -441,14 +441,14 @@ def run_tab2_analysis():
         pivot2 = pd.concat([pivot, avg_row], axis=0)
         fig = px.imshow(pivot2, aspect="auto", labels=dict(x="연도", y="일", color="°C"), color_continuous_scale="RdBu_r")
         
-        # [핵심] 모드바 숨기기 + 줌 고정 + 드래그 방지
+        # [수정] dragmode=False 추가하여 손 모양 방지
         fig.update_layout(
             height=780, 
             margin=dict(l=10, r=10, t=30, b=10), 
             coloraxis_colorbar=dict(title="°C"),
             xaxis=dict(fixedrange=True, title="연도"),
             yaxis=dict(fixedrange=True, title="일"),
-            dragmode=False,
+            dragmode=False, # 드래그 모드 비활성화 (커서 기본 유지)
             hovermode="closest"
         )
         
@@ -456,7 +456,7 @@ def run_tab2_analysis():
             hovertemplate="<b>%{x}년 " + str(sel_m) + "월 %{y}일</b><br>🌡️ 평균기온: %{z:.1f}℃<extra></extra>"
         )
         
-        # [중요] st.plotly_chart에서 config로 모드바 숨김
+        # [중요] config에서 모드바 숨기기
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
         
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
