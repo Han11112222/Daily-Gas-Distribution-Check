@@ -81,86 +81,69 @@ def run_tab1_management():
 
         return df, None
 
-    # [핵심] 과거 데이터 로드 및 랭킹 산출 함수 (초강력 필터 적용)
-    def get_historical_ranks(current_val, target_date):
+    # [핵심 수정] 과거 데이터 로드 및 랭킹 산출 함수 (MJ -> GJ 변환 및 필터 수정)
+    def get_historical_ranks(current_val_gj, target_date):
         history_file = Path(__file__).parent / "공급량(계획_실적).xlsx"
         
         if not history_file.exists():
             return None 
 
         try:
-            # 1. 파일 읽기 (헤더 찾기 로직 포함)
+            # 1. 파일 읽기: '일별실적' 시트를 읽어야 정확한 과거 일일 데이터를 가져옵니다.
+            # 시트 이름이 '일별실적'인지 확인하고 로드
             xls = pd.ExcelFile(history_file, engine="openpyxl")
-            sheet_name = "월별계획_실적" if "월별계획_실적" in xls.sheet_names else xls.sheet_names[0]
+            target_sheet = "일별실적" if "일별실적" in xls.sheet_names else xls.sheet_names[0]
             
-            raw = pd.read_excel(xls, sheet_name=sheet_name, header=None)
-            header_idx = None
-            for i, row in raw.iterrows():
-                row_str = row.astype(str).values
-                if any('연' in s for s in row_str) and any('월' in s for s in row_str):
-                    header_idx = i
-                    break
+            df_hist = pd.read_excel(xls, sheet_name=target_sheet)
             
-            if header_idx is None:
-                df_hist = pd.read_excel(xls, sheet_name=sheet_name)
-            else:
-                df_hist = raw.iloc[header_idx+1:].copy()
-                df_hist.columns = raw.iloc[header_idx].astype(str).str.replace(r'\s+', '', regex=True).tolist()
+            # 2. 컬럼 정리 (공백 제거)
+            df_hist.columns = [str(c).replace(" ", "").strip() for c in df_hist.columns]
 
-            # 2. 컬럼 매핑
-            col_act = None
-            col_month = None
+            # 3. 필수 컬럼 찾기
+            col_date = next((c for c in df_hist.columns if "일자" in c or "date" in c.lower()), None)
+            # MJ 단위 컬럼 찾기 (공급량(MJ))
+            col_mj = next((c for c in df_hist.columns if "공급량" in c and "MJ" in c), None)
             
-            for c in df_hist.columns:
-                if '실적' in c and ('GJ' in c or 'MJ' in c): col_act = c
-                if '월' in c: col_month = c
-            
-            if col_act is None: return None
+            if not col_date or not col_mj:
+                return None # 컬럼을 못 찾으면 랭킹 표시 안 함
 
-            # 3. 데이터 정제 (여기가 핵심!)
-            # 숫자로 변환 안되는 것들(텍스트 등) 모두 제거
-            df_hist[col_act] = pd.to_numeric(df_hist[col_act], errors='coerce')
-            df_hist = df_hist.dropna(subset=[col_act])
+            # 4. 데이터 정제
+            df_hist[col_date] = pd.to_datetime(df_hist[col_date], errors='coerce')
+            df_hist = df_hist.dropna(subset=[col_date])
+            
+            # [중요] 단위 변환: 과거 데이터(MJ) -> 현재 입력값(GJ) 단위로 맞춤
+            # 1 GJ = 1000 MJ 이므로, MJ / 1000 = GJ
+            df_hist['val_gj'] = pd.to_numeric(df_hist[col_mj], errors='coerce') / 1000.0
+            
+            # 유효 데이터 필터링 (0보다 큰 값만)
+            # 기존 코드의 < 2000000 필터는 MJ단위에서 너무 작아서 데이터를 다 날려버렸음. 제거함.
+            df_hist = df_hist.dropna(subset=['val_gj'])
+            df_hist = df_hist[df_hist['val_gj'] > 0]
 
-            # 단위 통일 (MJ -> GJ)
-            vals = df_hist[col_act].values
-            if 'MJ' in col_act:
-                vals = vals / 1000.0
+            # 5. 자기 자신(입력 중인 날짜)의 과거 기록이 있다면 제외 (중복 방지)
+            # 우리가 입력한 값(current_val_gj)을 포함해서 랭킹을 매길 것이므로, 
+            # 파일에 이미 저장된 동일 날짜 데이터는 뺍니다.
+            df_hist = df_hist[df_hist[col_date] != target_date]
+
+            # 6. 랭킹 계산
+            # 전체 데이터 + 현재 입력값
+            all_values = pd.concat([df_hist['val_gj'], pd.Series([current_val_gj])])
+            # 내림차순 정렬 후 현재 값의 순위 찾기
+            # (값이 클수록 1위)
+            rank_all = (all_values > current_val_gj).sum() + 1
             
-            # [필터] 값이 0 이하이거나, 2,000,000 이상인 경우(월간 합계일 확률 99%) 제거
-            # Han형님의 144위 문제는 여기서 해결됩니다. (합계 데이터 제거)
-            valid_mask = (vals > 0) & (vals < 2000000)
-            clean_vals = vals[valid_mask]
-            
-            # 4. 순위 계산 (입력값 vs 과거값들)
-            # (1) 역대 전체 랭킹
-            rank_all = (clean_vals > current_val).sum() + 1
-            
-            # (2) 역대 동월 랭킹
-            rank_month = "-"
-            if col_month:
-                df_hist[col_month] = pd.to_numeric(df_hist[col_month], errors='coerce')
-                # 위에서 만든 valid_mask와 월 조건을 동시에 만족하는 데이터만 추출
-                month_mask = (df_hist[col_month] == target_date.month) & (df_hist.index.isin(df_hist[valid_mask].index))
-                
-                # 원본에서 다시 가져오기보다는, 마스크로 필터링
-                month_vals_raw = df_hist.loc[month_mask, col_act].values
-                if 'MJ' in col_act:
-                    month_vals_clean = month_vals_raw / 1000.0
-                else:
-                    month_vals_clean = month_vals_raw
-                
-                # 합계 데이터 2차 방어 (혹시 몰라 한 번 더 필터)
-                month_vals_clean = month_vals_clean[month_vals_clean < 2000000]
-                
-                rank_month = (month_vals_clean > current_val).sum() + 1
+            # 7. 동월 랭킹 계산
+            # 과거 데이터 중 같은 '월'만 추출
+            hist_month = df_hist[df_hist[col_date].dt.month == target_date.month]
+            month_values = pd.concat([hist_month['val_gj'], pd.Series([current_val_gj])])
+            rank_month = (month_values > current_val_gj).sum() + 1
             
             # 1위일 경우 폭죽
             firecracker = "🎉" if rank_all == 1 else ""
             return f"{firecracker} 🏆 역대 전체: {rank_all}위  /  📅 역대 {target_date.month}월: {rank_month}위"
             
         except Exception as e:
-            return None
+            return f"랭킹 계산 중 오류: {str(e)}"
 
     if 'data_tab1' not in st.session_state:
         st.session_state.data_tab1 = None
