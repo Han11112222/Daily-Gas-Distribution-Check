@@ -40,7 +40,7 @@ def set_korean_font():
 set_korean_font()
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수] 데이터 로드 (Tab 1, 2 공통 사용)
+# [공통 함수] 데이터 로드 (Tab 1, 2 공통 사용 - 핵심)
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_historical_data_common():
@@ -54,12 +54,20 @@ def load_historical_data_common():
         
         col_date = next((c for c in df.columns if "일자" in c or "date" in c.lower()), None)
         col_mj = next((c for c in df.columns if "공급량" in c and "MJ" in c), None)
+        col_m3 = next((c for c in df.columns if "공급량" in c and "M3" in c), None) # 부피 컬럼 찾기
         
         if not col_date or not col_mj: return None
         
         df[col_date] = pd.to_datetime(df[col_date], errors='coerce')
         df = df.dropna(subset=[col_date])
         df['val_gj'] = pd.to_numeric(df[col_mj], errors='coerce') / 1000.0
+        
+        # 부피 데이터 로드 (없으면 0)
+        if col_m3:
+            df['val_m3'] = pd.to_numeric(df[col_m3], errors='coerce').fillna(0)
+        else:
+            df['val_m3'] = 0
+            
         df = df[df['val_gj'] > 0].copy()
         
         # 평균기온 컬럼 확보
@@ -68,34 +76,56 @@ def load_historical_data_common():
         else:
              df["평균기온(℃)"] = np.nan
 
-        return df[['val_gj', col_date, '평균기온(℃)']].rename(columns={col_date: '일자'})
+        # 필요한 컬럼만 리턴
+        return df[['val_gj', 'val_m3', col_date, '평균기온(℃)']].rename(columns={col_date: '일자'})
     except: return None
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (수정됨: 1위 달성 시 풍선 세레머니 추가!)
+# [탭 1] 도시가스 공급실적 관리 (수정됨: 엑셀 데이터 전체 자동 로드)
 # ==============================================================================
 def run_tab1_management():
+    # 1. 데이터 초기화 (강제 입력 삭제 -> 엑셀 데이터 로드)
     if 'tab1_df' not in st.session_state:
-        init_date = pd.to_datetime("2026-01-01")
-        
-        # 초기화 시 엑셀 파일에서 해당 날짜의 기온을 찾아옴
-        auto_temp = np.nan
         df_hist = load_historical_data_common()
-        if df_hist is not None:
-            match_row = df_hist[df_hist['일자'] == init_date]
-            if not match_row.empty:
-                auto_temp = match_row['평균기온(℃)'].iloc[0]
         
-        init_data = {
-            '날짜': [init_date],
-            '계획(GJ)': [222239],
-            '실적(GJ)': [257365],
-            '계획(m3)': [5221],
-            '실적(m3)': [6127],
-            '평균기온(℃)': [auto_temp]
-        }
-        st.session_state.tab1_df = pd.DataFrame(init_data)
+        if df_hist is not None and not df_hist.empty:
+            # 엑셀 데이터를 Tab 1 형식으로 변환
+            init_df = df_hist.copy()
+            init_df = init_df.rename(columns={
+                '일자': '날짜',
+                'val_gj': '실적(GJ)',
+                'val_m3': '실적(m3)'
+            })
+            # 계획값은 엑셀에 없으므로 일단 0이나 임의값으로 채움 (여기선 간단히 처리)
+            # 2026년 계획 파일이 따로 있다면 거기서 가져와야 하지만, 현재 로직상 0으로 둠
+            init_df['계획(GJ)'] = 0 
+            init_df['계획(m3)'] = 0
+            
+            # 2026-01-01 등 특정 날짜 계획값이 필요하다면 여기서 매핑 로직 추가 가능
+            # 예시: 2026-01-01 계획 강제 주입 (기존 로직 유지 차원)
+            mask_20260101 = init_df['날짜'] == '2026-01-01'
+            if mask_20260101.any():
+                init_df.loc[mask_20260101, '계획(GJ)'] = 222239
+                init_df.loc[mask_20260101, '계획(m3)'] = 5221
+            else:
+                # 엑셀에 2026-01-01이 아예 없으면 행 추가
+                new_row = pd.DataFrame([{
+                    '날짜': pd.to_datetime('2026-01-01'),
+                    '실적(GJ)': 0, '실적(m3)': 0, '평균기온(℃)': np.nan,
+                    '계획(GJ)': 222239, '계획(m3)': 5221
+                }])
+                init_df = pd.concat([init_df, new_row], ignore_index=True)
+
+            st.session_state.tab1_df = init_df
+        else:
+            # 엑셀 로드 실패 시 빈 프레임 (혹은 2026-01-01 껍데기)
+            st.session_state.tab1_df = pd.DataFrame({
+                '날짜': [pd.to_datetime('2026-01-01')],
+                '계획(GJ)': [222239], '실적(GJ)': [0],
+                '계획(m3)': [5221], '실적(m3)': [0],
+                '평균기온(℃)': [np.nan]
+            })
 
     df = st.session_state.tab1_df
 
@@ -106,31 +136,46 @@ def run_tab1_management():
 
     col_date, _ = st.columns([1, 4])
     with col_date:
-        default_date = pd.to_datetime("2026-01-01")
+        # 기본값: 데이터 중 가장 최신 날짜 (없으면 2026-01-01)
+        max_date_in_data = df['날짜'].max()
+        default_date = max_date_in_data if pd.notna(max_date_in_data) else pd.to_datetime("2026-01-01")
         selected_date = st.date_input("조회 기준일", value=default_date)
     target_date = pd.to_datetime(selected_date)
 
+    # 선택된 날짜의 데이터 찾기 (없으면 0행 추가)
     mask_day = df['날짜'] == target_date
     current_row = df[mask_day]
     
     if current_row.empty:
-        current_val_gj, plan_val_gj = 0, 0
-        current_val_m3, plan_val_m3 = 0, 0
-    else:
-        current_val_gj = float(current_row['실적(GJ)'].iloc[0])
-        plan_val_gj = float(current_row['계획(GJ)'].iloc[0])
-        current_val_m3 = float(current_row['실적(m3)'].iloc[0])
-        plan_val_m3 = float(current_row['계획(m3)'].iloc[0])
+        # 데이터프레임에 해당 날짜 행이 없으면 추가해줌
+        new_row = pd.DataFrame([{
+            '날짜': target_date,
+            '계획(GJ)': 0, '실적(GJ)': 0,
+            '계획(m3)': 0, '실적(m3)': 0,
+            '평균기온(℃)': np.nan
+        }])
+        df = pd.concat([df, new_row], ignore_index=True)
+        st.session_state.tab1_df = df
+        current_row = df[df['날짜'] == target_date]
 
+    current_val_gj = float(current_row['실적(GJ)'].iloc[0])
+    plan_val_gj = float(current_row['계획(GJ)'].iloc[0])
+    current_val_m3 = float(current_row['실적(m3)'].iloc[0])
+    plan_val_m3 = float(current_row['계획(m3)'].iloc[0])
+
+    # 랭킹 계산 (실시간 비교)
     rank_text = ""
-    is_top_rank = False # 1위 여부 체크 변수
+    is_top_rank = False
 
     if current_val_gj > 0:
-        df_hist = load_historical_data_common()
+        df_hist = load_historical_data_common() # 엑셀 원본 다시 로드 (비교군)
         if df_hist is not None and not df_hist.empty:
+            # 비교군에서 자기 자신(선택된 날짜) 제외
             df_hist = df_hist[df_hist['일자'] != target_date]
+            
             all_vals = pd.concat([df_hist['val_gj'], pd.Series([current_val_gj])])
             rank_all = (all_vals > current_val_gj).sum() + 1
+            
             hist_month = df_hist[df_hist['일자'].dt.month == target_date.month]
             month_vals = pd.concat([hist_month['val_gj'], pd.Series([current_val_gj])])
             rank_month = (month_vals > current_val_gj).sum() + 1
@@ -138,9 +183,7 @@ def run_tab1_management():
             firecracker = "🎉" if rank_all == 1 else ""
             rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
             
-            # [추가] 1위 달성 시 플래그 True
-            if rank_all == 1:
-                is_top_rank = True
+            if rank_all == 1: is_top_rank = True
 
     # 화면 표시 (Metrics)
     st.markdown("### 🔥 열량 실적 (GJ)")
@@ -151,11 +194,8 @@ def run_tab1_management():
         rate_gj = (current_val_gj / plan_val_gj * 100) if plan_val_gj > 0 else 0
         st.metric(label=f"일간 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
         st.caption(f"계획: {int(plan_val_gj):,} GJ")
-        
         if rank_text:
             st.markdown(f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span>", unsafe_allow_html=True)
-            
-            # [추가] 1위일 경우 풍선 세레머니 & 토스트 메시지 발사!
             if is_top_rank:
                 st.balloons()
                 st.toast("🎉 축하합니다! 역대 최고 공급량(1위)을 달성했습니다! 🎆")
@@ -171,12 +211,15 @@ def run_tab1_management():
     st.markdown("---")
     st.markdown("### 💧 부피 실적 (천 m³)")
     col_m1, col_m2, col_m3 = st.columns(3)
+    # 단위 조정 (이미 천m3 단위면 그대로, m3면 /1000) - 여기서는 엑셀이 m3단위라 가정하고 /1000
+    display_m3 = current_val_m3 / 1000 if current_val_m3 > 10000 else current_val_m3 
+    
     with col_m1:
-        st.metric(label="일간 실적", value=f"{int(current_val_m3):,} (천 m³)", delta=f"{int(current_val_m3 - plan_val_m3):+,}")
+        st.metric(label="일간 실적", value=f"{int(display_m3):,} (천 m³)", delta=f"{int(display_m3 - plan_val_m3):+,}")
     with col_m2:
-        st.metric(label="월간 누적", value=f"{int(current_val_m3):,} (천 m³)")
+        st.metric(label="월간 누적", value=f"{int(display_m3):,} (천 m³)")
     with col_m3:
-        st.metric(label="연간 누적", value=f"{int(current_val_m3):,} (천 m³)")
+        st.metric(label="연간 누적", value=f"{int(display_m3):,} (천 m³)")
 
     st.markdown("---")
     st.subheader(f"📝 {target_date.month}월 실적 입력")
@@ -185,6 +228,7 @@ def run_tab1_management():
     mask_month_view = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
     view_df = df.loc[mask_month_view].copy()
     
+    # 1. 열량 및 기온 입력
     st.markdown("##### 1️⃣ 열량(GJ) 및 기온 입력")
     edited_gj = st.data_editor(
         view_df[['날짜', '계획(GJ)', '실적(GJ)', '평균기온(℃)']],
@@ -203,10 +247,13 @@ def run_tab1_management():
         st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
+    
+    # 2. 부피 입력
     st.markdown("##### 2️⃣ 부피(천 m³) 입력")
     view_m3 = view_df[['날짜', '계획(m3)', '실적(m3)']].copy()
-    view_m3['계획(천m3)'] = view_m3['계획(m3)'].astype(int)
-    view_m3['실적(천m3)'] = view_m3['실적(m3)'].astype(int)
+    # 화면 표시용 천단위 변환
+    view_m3['계획(천m3)'] = (view_m3['계획(m3)'] / 1000).round(0).astype(int)
+    view_m3['실적(천m3)'] = (view_m3['실적(m3)'] / 1000).round(0).astype(int)
     
     edited_m3 = st.data_editor(
         view_m3[['날짜', '계획(천m3)', '실적(천m3)']],
@@ -219,7 +266,8 @@ def run_tab1_management():
     )
 
     if not edited_m3.equals(view_m3[['날짜', '계획(천m3)', '실적(천m3)']]):
-        new_raw_m3 = edited_m3['실적(천m3)']
+        # 천단위 -> 원래 단위 복구 후 저장
+        new_raw_m3 = edited_m3['실적(천m3)'] * 1000
         df.loc[mask_month_view, '실적(m3)'] = new_raw_m3.values
         st.session_state.tab1_df = df
         st.rerun()
@@ -232,7 +280,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (기존 완벽 버전 유지)
+# [탭 2] 공급량 분석 (완벽 유지)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
