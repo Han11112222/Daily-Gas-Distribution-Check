@@ -62,7 +62,7 @@ def load_historical_data_common():
         df['val_gj'] = pd.to_numeric(df[col_mj], errors='coerce') / 1000.0
         df = df[df['val_gj'] > 0].copy()
         
-        # [수정] 평균기온 컬럼 확보
+        # 평균기온 컬럼 확보
         if "평균기온(℃)" in df.columns:
              df["평균기온(℃)"] = pd.to_numeric(df["평균기온(℃)"], errors='coerce')
         else:
@@ -73,17 +73,16 @@ def load_historical_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (수정됨: 엑셀에서 기온 자동 로드)
+# [탭 1] 도시가스 공급실적 관리 (수정됨: 1위 달성 시 풍선 세레머니 추가!)
 # ==============================================================================
 def run_tab1_management():
     if 'tab1_df' not in st.session_state:
         init_date = pd.to_datetime("2026-01-01")
         
-        # [핵심 수정] 초기화 시 엑셀 파일에서 해당 날짜의 기온을 찾아옴
+        # 초기화 시 엑셀 파일에서 해당 날짜의 기온을 찾아옴
         auto_temp = np.nan
         df_hist = load_historical_data_common()
         if df_hist is not None:
-            # 엑셀에 2026-01-01 데이터가 있는지 확인
             match_row = df_hist[df_hist['일자'] == init_date]
             if not match_row.empty:
                 auto_temp = match_row['평균기온(℃)'].iloc[0]
@@ -94,7 +93,7 @@ def run_tab1_management():
             '실적(GJ)': [257365],
             '계획(m3)': [5221],
             '실적(m3)': [6127],
-            '평균기온(℃)': [auto_temp] # 찾아온 기온 값 자동 입력 (없으면 NaN)
+            '평균기온(℃)': [auto_temp]
         }
         st.session_state.tab1_df = pd.DataFrame(init_data)
 
@@ -124,6 +123,8 @@ def run_tab1_management():
         plan_val_m3 = float(current_row['계획(m3)'].iloc[0])
 
     rank_text = ""
+    is_top_rank = False # 1위 여부 체크 변수
+
     if current_val_gj > 0:
         df_hist = load_historical_data_common()
         if df_hist is not None and not df_hist.empty:
@@ -133,9 +134,15 @@ def run_tab1_management():
             hist_month = df_hist[df_hist['일자'].dt.month == target_date.month]
             month_vals = pd.concat([hist_month['val_gj'], pd.Series([current_val_gj])])
             rank_month = (month_vals > current_val_gj).sum() + 1
+            
             firecracker = "🎉" if rank_all == 1 else ""
             rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
+            
+            # [추가] 1위 달성 시 플래그 True
+            if rank_all == 1:
+                is_top_rank = True
 
+    # 화면 표시 (Metrics)
     st.markdown("### 🔥 열량 실적 (GJ)")
     col_g1, col_g2, col_g3 = st.columns(3)
     
@@ -144,8 +151,14 @@ def run_tab1_management():
         rate_gj = (current_val_gj / plan_val_gj * 100) if plan_val_gj > 0 else 0
         st.metric(label=f"일간 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
         st.caption(f"계획: {int(plan_val_gj):,} GJ")
+        
         if rank_text:
             st.markdown(f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span>", unsafe_allow_html=True)
+            
+            # [추가] 1위일 경우 풍선 세레머니 & 토스트 메시지 발사!
+            if is_top_rank:
+                st.balloons()
+                st.toast("🎉 축하합니다! 역대 최고 공급량(1위)을 달성했습니다! 🎆")
 
     with col_g2:
         st.metric(label=f"월간 누적 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
@@ -219,7 +232,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 랭킹 표시 여백 확보)
+# [탭 2] 공급량 분석 (기존 완벽 버전 유지)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -441,7 +454,6 @@ def run_tab2_analysis():
                 max_temp = max_row['평균기온(℃)']
                 temp_str = f"{max_temp:.1f}℃" if not pd.isna(max_temp) else "-"
 
-                # [수정] 랭킹 카드를 오른쪽으로 밀어내서(margin-left) 기온 텍스트 공간 확보
                 st.markdown(f"""<div style="background-color:#e0f2fe;padding:15px;border-radius:10px;border:1px solid #bae6fd;margin-bottom:20px;">
                     <h4 style="margin:0; color:#0369a1;">📢 {target_date_str} 실적 랭킹</h4>
                     <div style="font-size:16px; margin-top:5px; color:#333;">
