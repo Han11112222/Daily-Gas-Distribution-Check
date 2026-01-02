@@ -131,9 +131,10 @@ def load_2026_plan_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (수정됨: NameError 해결)
+# [탭 1] 도시가스 공급실적 관리 (수정됨: 계획값 전체 자동 매핑)
 # ==============================================================================
 def run_tab1_management():
+    # 1. 데이터 초기화 (실적 로드)
     if 'tab1_df' not in st.session_state:
         df_hist = load_historical_data_common()
         if df_hist is not None and not df_hist.empty:
@@ -142,18 +143,43 @@ def run_tab1_management():
                 'val_gj': '실적(GJ)',
                 'val_m3': '실적(m3)'
             })
-            init_df['계획(GJ)'] = 0
-            init_df['계획(m3)'] = 0
+            # 계획값 초기화 (이후에 채움)
+            init_df['계획(GJ)'] = 0.0
+            init_df['계획(m3)'] = 0.0
             st.session_state.tab1_df = init_df
         else:
             st.session_state.tab1_df = pd.DataFrame({
                 '날짜': [pd.to_datetime('2026-01-01')],
-                '계획(GJ)': [0], '실적(GJ)': [0],
-                '계획(m3)': [0], '실적(m3)': [0],
+                '계획(GJ)': [0.0], '실적(GJ)': [0.0],
+                '계획(m3)': [0.0], '실적(m3)': [0.0],
                 '평균기온(℃)': [np.nan]
             })
 
     df = st.session_state.tab1_df
+
+    # --------------------------------------------------------------------------
+    # [핵심 수정] 계획 데이터 전체 자동 동기화 (눈속임 X, 전체 매핑 O)
+    # --------------------------------------------------------------------------
+    df_plan_file = load_2026_plan_data_common()
+    if df_plan_file is not None and not df_plan_file.empty:
+        # 계획 데이터를 날짜 기준으로 딕셔너리 매핑
+        plan_gj_map = df_plan_file.set_index('날짜')['plan_gj']
+        plan_m3_map = df_plan_file.set_index('날짜')['plan_m3']
+        
+        # 현재 df의 계획 값이 0인 경우, 계획 파일의 값으로 채워넣기 (Update)
+        # map을 사용하여 전체 날짜에 대해 한 번에 적용
+        
+        # 1. GJ 매핑
+        mapped_gj = df['날짜'].map(plan_gj_map)
+        df['계획(GJ)'] = np.where(df['계획(GJ)'] == 0, mapped_gj.fillna(0), df['계획(GJ)'])
+        
+        # 2. m3 매핑
+        mapped_m3 = df['날짜'].map(plan_m3_map)
+        df['계획(m3)'] = np.where(df['계획(m3)'] == 0, mapped_m3.fillna(0), df['계획(m3)'])
+        
+        # 세션 업데이트
+        st.session_state.tab1_df = df
+    # --------------------------------------------------------------------------
 
     st.sidebar.header("📂 [관리] 데이터 파일")
     uploaded = st.sidebar.file_uploader("연간계획 엑셀 업로드", type=['xlsx'], key="u1")
@@ -167,39 +193,30 @@ def run_tab1_management():
         selected_date = st.date_input("조회 기준일", value=max_date)
     target_date = pd.to_datetime(selected_date)
 
-    # 1. 계획 데이터 가져오기
-    df_plan_file = load_2026_plan_data_common()
-    plan_gj_val = 0
-    plan_m3_val = 0
-    
-    if df_plan_file is not None:
-        plan_row = df_plan_file[df_plan_file['날짜'] == target_date]
-        if not plan_row.empty:
-            plan_gj_val = plan_row['plan_gj'].iloc[0]
-            plan_m3_val = plan_row['plan_m3'].iloc[0]
-
-    # 2. 현재 데이터 업데이트
+    # 선택된 날짜 데이터 확인 및 행 추가
     mask_day = df['날짜'] == target_date
     current_row = df[mask_day]
     
     if current_row.empty:
+        # 계획 파일에서 해당 날짜 계획 가져오기
+        p_gj, p_m3 = 0, 0
+        if df_plan_file is not None:
+            p_row = df_plan_file[df_plan_file['날짜'] == target_date]
+            if not p_row.empty:
+                p_gj = p_row['plan_gj'].iloc[0]
+                p_m3 = p_row['plan_m3'].iloc[0]
+
         new_row = pd.DataFrame([{
             '날짜': target_date,
-            '계획(GJ)': plan_gj_val,
+            '계획(GJ)': p_gj,
             '실적(GJ)': 0,
-            '계획(m3)': plan_m3_val,
+            '계획(m3)': p_m3,
             '실적(m3)': 0,
             '평균기온(℃)': np.nan
         }])
         df = pd.concat([df, new_row], ignore_index=True)
         st.session_state.tab1_df = df
         current_row = df[df['날짜'] == target_date]
-    else:
-        if current_row['계획(GJ)'].iloc[0] == 0 and plan_gj_val > 0:
-            df.loc[mask_day, '계획(GJ)'] = plan_gj_val
-            df.loc[mask_day, '계획(m3)'] = plan_m3_val
-            st.session_state.tab1_df = df
-            current_row = df[mask_day]
 
     current_val_gj = float(current_row['실적(GJ)'].iloc[0])
     plan_val_gj = float(current_row['계획(GJ)'].iloc[0])
@@ -222,7 +239,7 @@ def run_tab1_management():
             rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
             if rank_all == 1: is_top_rank = True
 
-    # KPI 화면 표시
+    # 화면 표시 (Metrics)
     st.markdown("### 🔥 열량 실적 (GJ)")
     col_g1, col_g2, col_g3 = st.columns(3)
     
@@ -277,8 +294,7 @@ def run_tab1_management():
     st.subheader(f"📝 {target_date.month}월 실적 입력")
     st.info("💡 값을 수정하고 엔터(Enter)를 치면 상단 그래프와 랭킹이 즉시 업데이트됩니다.")
 
-    # [수정된 부분: NameError 해결을 위해 필터 변수 정의 위치 확인]
-    # 해당 월 데이터를 필터링하는 마스크 생성
+    # 1. 열량 및 기온 입력
     mask_month_view = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
     view_df = df.loc[mask_month_view].copy()
     
@@ -301,6 +317,7 @@ def run_tab1_management():
 
     st.markdown("<br>", unsafe_allow_html=True)
     
+    # 2. 부피 입력
     st.markdown("##### 2️⃣ 부피(천 m³) 입력")
     view_m3 = view_df[['날짜', '계획(m3)', '실적(m3)']].copy()
     view_m3['계획(천m3)'] = view_m3['계획(m3)'].apply(lambda x: int(x/1000) if x > 10000 else int(x))
@@ -332,7 +349,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (기존 코드 유지)
+# [탭 2] 공급량 분석 (기존 완벽 버전 유지)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
