@@ -131,10 +131,9 @@ def load_2026_plan_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (수정됨: 계획값 전체 자동 매핑)
+# [탭 1] 도시가스 공급실적 관리
 # ==============================================================================
 def run_tab1_management():
-    # 1. 데이터 초기화 (실적 로드)
     if 'tab1_df' not in st.session_state:
         df_hist = load_historical_data_common()
         if df_hist is not None and not df_hist.empty:
@@ -143,7 +142,6 @@ def run_tab1_management():
                 'val_gj': '실적(GJ)',
                 'val_m3': '실적(m3)'
             })
-            # 계획값 초기화 (이후에 채움)
             init_df['계획(GJ)'] = 0.0
             init_df['계획(m3)'] = 0.0
             st.session_state.tab1_df = init_df
@@ -157,29 +155,19 @@ def run_tab1_management():
 
     df = st.session_state.tab1_df
 
-    # --------------------------------------------------------------------------
-    # [핵심 수정] 계획 데이터 전체 자동 동기화 (눈속임 X, 전체 매핑 O)
-    # --------------------------------------------------------------------------
+    # 계획 데이터 전체 자동 동기화
     df_plan_file = load_2026_plan_data_common()
     if df_plan_file is not None and not df_plan_file.empty:
-        # 계획 데이터를 날짜 기준으로 딕셔너리 매핑
         plan_gj_map = df_plan_file.set_index('날짜')['plan_gj']
         plan_m3_map = df_plan_file.set_index('날짜')['plan_m3']
         
-        # 현재 df의 계획 값이 0인 경우, 계획 파일의 값으로 채워넣기 (Update)
-        # map을 사용하여 전체 날짜에 대해 한 번에 적용
-        
-        # 1. GJ 매핑
         mapped_gj = df['날짜'].map(plan_gj_map)
         df['계획(GJ)'] = np.where(df['계획(GJ)'] == 0, mapped_gj.fillna(0), df['계획(GJ)'])
         
-        # 2. m3 매핑
         mapped_m3 = df['날짜'].map(plan_m3_map)
         df['계획(m3)'] = np.where(df['계획(m3)'] == 0, mapped_m3.fillna(0), df['계획(m3)'])
         
-        # 세션 업데이트
         st.session_state.tab1_df = df
-    # --------------------------------------------------------------------------
 
     st.sidebar.header("📂 [관리] 데이터 파일")
     uploaded = st.sidebar.file_uploader("연간계획 엑셀 업로드", type=['xlsx'], key="u1")
@@ -193,12 +181,10 @@ def run_tab1_management():
         selected_date = st.date_input("조회 기준일", value=max_date)
     target_date = pd.to_datetime(selected_date)
 
-    # 선택된 날짜 데이터 확인 및 행 추가
     mask_day = df['날짜'] == target_date
     current_row = df[mask_day]
     
     if current_row.empty:
-        # 계획 파일에서 해당 날짜 계획 가져오기
         p_gj, p_m3 = 0, 0
         if df_plan_file is not None:
             p_row = df_plan_file[df_plan_file['날짜'] == target_date]
@@ -223,7 +209,6 @@ def run_tab1_management():
     current_val_m3 = float(current_row['실적(m3)'].iloc[0])
     plan_val_m3 = float(current_row['계획(m3)'].iloc[0])
 
-    # 랭킹 계산
     rank_text = ""
     is_top_rank = False
     if current_val_gj > 0:
@@ -239,7 +224,6 @@ def run_tab1_management():
             rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
             if rank_all == 1: is_top_rank = True
 
-    # 화면 표시 (Metrics)
     st.markdown("### 🔥 열량 실적 (GJ)")
     col_g1, col_g2, col_g3 = st.columns(3)
     
@@ -294,7 +278,6 @@ def run_tab1_management():
     st.subheader(f"📝 {target_date.month}월 실적 입력")
     st.info("💡 값을 수정하고 엔터(Enter)를 치면 상단 그래프와 랭킹이 즉시 업데이트됩니다.")
 
-    # 1. 열량 및 기온 입력
     mask_month_view = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
     view_df = df.loc[mask_month_view].copy()
     
@@ -317,7 +300,6 @@ def run_tab1_management():
 
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # 2. 부피 입력
     st.markdown("##### 2️⃣ 부피(천 m³) 입력")
     view_m3 = view_df[['날짜', '계획(m3)', '실적(m3)']].copy()
     view_m3['계획(천m3)'] = view_m3['계획(m3)'].apply(lambda x: int(x/1000) if x > 10000 else int(x))
@@ -349,7 +331,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (기존 완벽 버전 유지)
+# [탭 2] 공급량 분석 (수정됨: 기온 매트릭스 툴팁 업그레이드)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -463,6 +445,12 @@ def run_tab2_analysis():
         pivot2 = pd.concat([pivot, avg_row], axis=0)
         fig = px.imshow(pivot2, aspect="auto", labels=dict(x="연도", y="일", color="°C"), color_continuous_scale="RdBu_r")
         fig.update_layout(height=780, margin=dict(l=10, r=10, t=30, b=10), coloraxis_colorbar=dict(title="°C"))
+        
+        # [수정] 툴팁 커스터마이징 (한글 표시)
+        fig.update_traces(
+            hovertemplate=f"<b>%{{x}}년 {sel_m}월 %{{y}}일</b><br>🌡️ 평균기온: %{{z:.1f}}℃<extra></extra>"
+        )
+        
         st.plotly_chart(fig, use_container_width=True)
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
 
