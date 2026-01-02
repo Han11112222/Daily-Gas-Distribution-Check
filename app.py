@@ -81,81 +81,48 @@ def run_tab1_management():
 
         return df, None
 
-    # [핵심] 과거 데이터 로드 및 랭킹 산출 함수 (초강력 필터 적용)
-    def get_historical_ranks(current_val, target_date):
+    # [핵심 수정] 과거 데이터 로드 및 랭킹 산출 함수 (MJ -> GJ 변환 및 필터 수정)
+    def get_historical_ranks(current_val_gj, target_date):
         history_file = Path(__file__).parent / "공급량(계획_실적).xlsx"
         
         if not history_file.exists():
             return None 
 
         try:
-            # 1. 파일 읽기 (헤더 찾기 로직 포함)
+            # 1. 파일 읽기: '일별실적' 시트를 읽어야 정확한 과거 일일 데이터를 가져옵니다.
             xls = pd.ExcelFile(history_file, engine="openpyxl")
-            sheet_name = "월별계획_실적" if "월별계획_실적" in xls.sheet_names else xls.sheet_names[0]
+            target_sheet = "일별실적" if "일별실적" in xls.sheet_names else xls.sheet_names[0]
             
-            raw = pd.read_excel(xls, sheet_name=sheet_name, header=None)
-            header_idx = None
-            for i, row in raw.iterrows():
-                row_str = row.astype(str).values
-                if any('연' in s for s in row_str) and any('월' in s for s in row_str):
-                    header_idx = i
-                    break
-            
-            if header_idx is None:
-                df_hist = pd.read_excel(xls, sheet_name=sheet_name)
-            else:
-                df_hist = raw.iloc[header_idx+1:].copy()
-                df_hist.columns = raw.iloc[header_idx].astype(str).str.replace(r'\s+', '', regex=True).tolist()
+            df_hist = pd.read_excel(xls, sheet_name=target_sheet)
+            df_hist.columns = [str(c).replace(" ", "").strip() for c in df_hist.columns]
 
-            # 2. 컬럼 매핑
-            col_act = None
-            col_month = None
+            col_date = next((c for c in df_hist.columns if "일자" in c or "date" in c.lower()), None)
+            col_mj = next((c for c in df_hist.columns if "공급량" in c and "MJ" in c), None)
             
-            for c in df_hist.columns:
-                if '실적' in c and ('GJ' in c or 'MJ' in c): col_act = c
-                if '월' in c: col_month = c
-            
-            if col_act is None: return None
+            if not col_date or not col_mj: return None
 
-            # 3. 데이터 정제 (여기가 핵심!)
-            # 숫자로 변환 안되는 것들(텍스트 등) 모두 제거
-            df_hist[col_act] = pd.to_numeric(df_hist[col_act], errors='coerce')
-            df_hist = df_hist.dropna(subset=[col_act])
+            df_hist[col_date] = pd.to_datetime(df_hist[col_date], errors='coerce')
+            df_hist = df_hist.dropna(subset=[col_date])
+            
+            # [중요] 단위 변환: MJ -> GJ
+            df_hist['val_gj'] = pd.to_numeric(df_hist[col_mj], errors='coerce') / 1000.0
+            
+            # 유효 데이터 필터링 (0보다 큰 값만)
+            df_hist = df_hist.dropna(subset=['val_gj'])
+            df_hist = df_hist[df_hist['val_gj'] > 0]
 
-            # 단위 통일 (MJ -> GJ)
-            vals = df_hist[col_act].values
-            if 'MJ' in col_act:
-                vals = vals / 1000.0
+            # 자기 자신 제외
+            df_hist = df_hist[df_hist[col_date] != target_date]
+
+            # 전체 랭킹
+            all_values = pd.concat([df_hist['val_gj'], pd.Series([current_val_gj])])
+            rank_all = (all_values > current_val_gj).sum() + 1
             
-            # [필터] 값이 0 이하이거나, 2,000,000 이상인 경우(월간 합계일 확률 99%) 제거
-            # Han형님의 144위 문제는 여기서 해결됩니다. (합계 데이터 제거)
-            valid_mask = (vals > 0) & (vals < 2000000)
-            clean_vals = vals[valid_mask]
+            # 동월 랭킹
+            hist_month = df_hist[df_hist[col_date].dt.month == target_date.month]
+            month_values = pd.concat([hist_month['val_gj'], pd.Series([current_val_gj])])
+            rank_month = (month_values > current_val_gj).sum() + 1
             
-            # 4. 순위 계산 (입력값 vs 과거값들)
-            # (1) 역대 전체 랭킹
-            rank_all = (clean_vals > current_val).sum() + 1
-            
-            # (2) 역대 동월 랭킹
-            rank_month = "-"
-            if col_month:
-                df_hist[col_month] = pd.to_numeric(df_hist[col_month], errors='coerce')
-                # 위에서 만든 valid_mask와 월 조건을 동시에 만족하는 데이터만 추출
-                month_mask = (df_hist[col_month] == target_date.month) & (df_hist.index.isin(df_hist[valid_mask].index))
-                
-                # 원본에서 다시 가져오기보다는, 마스크로 필터링
-                month_vals_raw = df_hist.loc[month_mask, col_act].values
-                if 'MJ' in col_act:
-                    month_vals_clean = month_vals_raw / 1000.0
-                else:
-                    month_vals_clean = month_vals_raw
-                
-                # 합계 데이터 2차 방어 (혹시 몰라 한 번 더 필터)
-                month_vals_clean = month_vals_clean[month_vals_clean < 2000000]
-                
-                rank_month = (month_vals_clean > current_val).sum() + 1
-            
-            # 1위일 경우 폭죽
             firecracker = "🎉" if rank_all == 1 else ""
             return f"{firecracker} 🏆 역대 전체: {rank_all}위  /  📅 역대 {target_date.month}월: {rank_month}위"
             
@@ -192,7 +159,6 @@ def run_tab1_management():
         st.warning("👈 좌측 사이드바에서 엑셀 파일을 업로드해주세요.")
         return
 
-    # 세션에 저장된 데이터프레임을 가져옵니다.
     df = st.session_state.data_tab1
 
     st.title("🔥 도시가스 공급실적 관리")
@@ -227,10 +193,9 @@ def run_tab1_management():
 
     # 2. KPI 산출
     metrics = calc_kpi(df, target_date)
-    current_val_gj = metrics['Day']['gj']['a'] # 현재 화면에 표시될 일간 실적
+    current_val_gj = metrics['Day']['gj']['a'] 
 
-    # 3. [중요] 랭킹 실시간 계산
-    # 사용자가 데이터를 수정하면 df가 업데이트되고 -> 페이지 리런 -> 여기 도달 -> 업데이트된 값으로 랭킹 계산
+    # 3. 랭킹 실시간 계산
     rank_text = ""
     if current_val_gj > 0:
         rank_info = get_historical_ranks(current_val_gj, target_date)
@@ -245,10 +210,7 @@ def run_tab1_management():
         m = metrics['Day']['gj']
         st.metric(label=f"일간 달성률 {m['rate']:.1f}%", value=f"{int(m['a']):,} GJ", delta=f"{int(m['diff']):+,} GJ")
         st.caption(f"계획: {int(m['p']):,} GJ")
-        
-        # 랭킹 표시 (값이 있을 때만)
-        if rank_text:
-            st.info(rank_text)
+        if rank_text: st.info(rank_text)
 
     with col_g2:
         m = metrics['MTD']['gj']
@@ -294,13 +256,9 @@ def run_tab1_management():
         hide_index=True, use_container_width=True, key="editor_gj"
     )
     
-    # [데이터 수정 감지 로직]
     if not edited_gj.equals(view_gj):
-        # 1. 수정된 데이터프레임으로 원본 업데이트
         df.update(edited_gj)
-        # 2. 세션 상태 업데이트 (가장 중요)
         st.session_state.data_tab1 = df
-        # 3. 페이지 리런 -> 위쪽의 calc_kpi와 get_historical_ranks가 갱신된 값으로 다시 실행됨
         st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -338,7 +296,6 @@ def run_tab1_management():
 # [탭 2] 공급량 분석
 # ==============================================================================
 def run_tab2_analysis():
-    # --- 분석용 헬퍼 함수 ---
     def center_style(styler):
         styler = styler.set_properties(**{"text-align": "center"})
         styler = styler.set_table_styles([dict(selector="th", props=[("text-align", "center")])])
@@ -496,6 +453,16 @@ def run_tab2_analysis():
         act_col = "공급량(MJ)"
         if act_col not in day_df.columns: return
         
+        # [핵심] Tab 1에서 입력된 최신 데이터 병합
+        if 'data_tab1' in st.session_state and st.session_state.data_tab1 is not None:
+            new_data = st.session_state.data_tab1.copy()
+            new_data = new_data[new_data['실적(GJ)'] > 0][['날짜', '실적(GJ)']].copy()
+            new_data.columns = ['일자', act_col]
+            new_data[act_col] = new_data[act_col] * 1000 # GJ -> MJ로 변환해서 합쳐야 함 (day_df가 MJ단위이므로)
+            
+            # 중복 제거 후 병합
+            day_df = pd.concat([day_df, new_data]).drop_duplicates(subset=['일자'], keep='last').sort_values('일자')
+
         # 데이터 정리
         df_all = day_df.copy()
         df_all["연"] = df_all["일자"].dt.year
@@ -514,26 +481,17 @@ def run_tab2_analysis():
                 plan_curve_x = plan_month['날짜'].dt.day.tolist()
                 plan_curve_y = plan_month['plan_gj'].tolist()
         
-        # [수정 확인] '(최근 3년 + 계획)' 문구 삭제됨
         st.markdown(f"### 📈 {sel_month}월 일별 패턴 비교")
         cand_years = sorted(df_all["연"].unique().tolist())
         past_candidates = [y for y in cand_years if y < sel_year]
-        
         default_years = past_candidates[-2:] if len(past_candidates) >= 2 else past_candidates
-        
         past_years = st.multiselect("과거 연도 선택", options=past_candidates, default=default_years, key=f"{key_prefix}past_years")
         
         fig1 = go.Figure()
         
         # (1) 2026년 실제 계획
         if plan_curve_x:
-            fig1.add_scatter(
-                x=plan_curve_x, 
-                y=plan_curve_y, 
-                mode="lines", 
-                name=f"{sel_year}년 {sel_month}월 계획 (사업계획)", 
-                line=dict(color="#FF4B4B", width=3, dash="dot")
-            )
+            fig1.add_scatter(x=plan_curve_x, y=plan_curve_y, mode="lines", name=f"{sel_year}년 {sel_month}월 계획 (사업계획)", line=dict(color="#FF4B4B", width=3, dash="dot"))
 
         # (2) 과거 연도 실적
         pastel_colors = ["#93C5FD", "#A5B4FC", "#C4B5FD", "#FDA4AF", "#FCA5A5", "#FCD34D", "#86EFAC"]
@@ -542,38 +500,16 @@ def run_tab2_analysis():
         for idx, y in enumerate(past_years):
             sub = df_all[(df_all["연"] == y) & (df_all["월"] == sel_month)].copy()
             if sub.empty: continue
+            line_color = "#3B82F6" if y == prev_year else pastel_colors[idx % len(pastel_colors)]
+            line_width = 3 if y == prev_year else 1.5
+            op_mode = "lines+markers" if y == prev_year else "lines"
+            fig1.add_scatter(x=sub["일"], y=sub[act_col] / 1000.0, mode=op_mode, name=f"{y}년 {sel_month}월 실적", line=dict(color=line_color, width=line_width))
             
-            if y == prev_year:
-                line_color = "#3B82F6"
-                line_width = 3
-                op_mode = "lines+markers"
-            else:
-                line_color = pastel_colors[idx % len(pastel_colors)]
-                line_width = 1.5
-                op_mode = "lines"
-
-            fig1.add_scatter(
-                x=sub["일"], y=sub[act_col] / 1000.0, 
-                mode=op_mode, 
-                name=f"{y}년 {sel_month}월 실적", 
-                line=dict(color=line_color, width=line_width)
-            )
-            
-        # (3) 당년도 실적
+        # (3) 당년도 실적 (입력된 데이터 포함)
         if not this_df.empty: 
-            fig1.add_scatter(
-                x=this_df["일"], y=this_df[act_col] / 1000.0, 
-                mode="lines+markers", 
-                name=f"{sel_year}년 {sel_month}월 실적", 
-                line=dict(color="black", width=4)
-            )
+            fig1.add_scatter(x=this_df["일"], y=this_df[act_col] / 1000.0, mode="lines+markers", name=f"{sel_year}년 {sel_month}월 실적", line=dict(color="black", width=4))
         
-        fig1.update_layout(
-            title=f"{sel_year}년 {sel_month}월 일별 공급량 패턴", 
-            xaxis_title="일", 
-            yaxis_title="공급량 (GJ)", 
-            margin=dict(l=10, r=10, t=50, b=10)
-        )
+        fig1.update_layout(title=f"{sel_year}년 {sel_month}월 일별 공급량 패턴", xaxis_title="일", yaxis_title="공급량 (GJ)", margin=dict(l=10, r=10, t=50, b=10))
         st.plotly_chart(fig1, use_container_width=True)
 
         # 4. 편차 그래프
@@ -600,7 +536,25 @@ def run_tab2_analysis():
         if not month_all.empty:
             top_n = st.slider("표시할 순위 개수", 5, 50, 10, 5, key=f"{key_prefix}top_n")
             
+            # [Highlight Card] 선택월의 최고 실적 표시 (Tab 1에서 입력한 값 포함)
             st.markdown(f"#### 📅 {sel_month}월 기준 Top 랭킹")
+            
+            # 현재 선택된 달의 최고 실적 찾기
+            if not this_df.empty:
+                max_row = this_df.loc[this_df[act_col].idxmax()]
+                max_val_gj = max_row[act_col] / 1000.0
+                
+                # 전체 랭킹 계산
+                all_vals_gj = df_all[act_col] / 1000.0
+                rank_total = (all_vals_gj > max_val_gj).sum() + 1
+                
+                # 동월 랭킹 계산
+                month_vals_gj = month_all[act_col] / 1000.0
+                rank_month = (month_vals_gj > max_val_gj).sum() + 1
+                
+                # Highlight Card 렌더링
+                st.info(f"🏆 **{sel_year}년 {sel_month}월 최고 실적 ({max_row['일']}일): {max_val_gj:,.0f} GJ** (역대 전체 {rank_total}위 / 역대 {sel_month}월 중 {rank_month}위)")
+
             month_all["공급량_GJ"] = month_all[act_col] / 1000.0
             rank_df = month_all.sort_values("공급량_GJ", ascending=False).head(top_n).copy()
             rank_df.insert(0, "Rank", range(1, len(rank_df) + 1))
@@ -633,13 +587,11 @@ def run_tab2_analysis():
             # 3차 다항식
             st.markdown("#### 🌡️ 기온별 공급량 변화 (3차 다항식)")
             temp_supply = month_all.dropna(subset=["평균기온(℃)", act_col]).copy()
-            
             temp_supply = temp_supply[temp_supply[act_col] > 100]
 
             if len(temp_supply) > 4:
                 x = temp_supply["평균기온(℃)"].values
                 y = temp_supply[act_col].values / 1000.0
-                
                 coeffs = np.polyfit(x, y, 3)
                 p = np.poly1d(coeffs)
                 xs = np.linspace(x.min() - 1, x.max() + 1, 150)
