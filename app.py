@@ -131,7 +131,7 @@ def load_2026_plan_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (기존 완벽 버전 유지)
+# [탭 1] 도시가스 공급실적 관리 (완벽 유지)
 # ==============================================================================
 def run_tab1_management():
     if 'tab1_df' not in st.session_state:
@@ -327,7 +327,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 툴팁 개선 및 줌 잠금)
+# [탭 2] 공급량 분석 (수정됨: 히트맵 줌 방지 및 툴팁 개선)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -441,15 +441,17 @@ def run_tab2_analysis():
         pivot2 = pd.concat([pivot, avg_row], axis=0)
         fig = px.imshow(pivot2, aspect="auto", labels=dict(x="연도", y="일", color="°C"), color_continuous_scale="RdBu_r")
         
-        # [수정] 툴팁 표시 및 줌 잠금(fixedrange)
+        # [핵심 수정] dragmode=False로 설정하여 줌/이동 방지하고 툴팁만 나오게 함
         fig.update_layout(
             height=780, 
             margin=dict(l=10, r=10, t=30, b=10), 
             coloraxis_colorbar=dict(title="°C"),
             xaxis=dict(fixedrange=True, title="연도"),
-            yaxis=dict(fixedrange=True, title="일")
+            yaxis=dict(fixedrange=True, title="일"),
+            dragmode=False, # 커서를 일반 화살표로 유지하고 드래그 방지
+            hovermode="closest"
         )
-        # 툴팁 한글화: x=연도, y=일, z=기온
+        
         fig.update_traces(
             hovertemplate="<b>%{x}년 " + str(sel_m) + "월 %{y}일</b><br>🌡️ 평균기온: %{z:.1f}℃<extra></extra>"
         )
