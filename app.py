@@ -327,7 +327,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 히트맵 줌 방지 및 툴팁 개선)
+# [탭 2] 공급량 분석 (수정됨: 툴팁 개선 및 줌/드래그 방지)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -441,14 +441,14 @@ def run_tab2_analysis():
         pivot2 = pd.concat([pivot, avg_row], axis=0)
         fig = px.imshow(pivot2, aspect="auto", labels=dict(x="연도", y="일", color="°C"), color_continuous_scale="RdBu_r")
         
-        # [핵심 수정] dragmode=False로 설정하여 줌/이동 방지하고 툴팁만 나오게 함
+        # [핵심] 모드바 숨기기 + 줌 고정 + 드래그 방지
         fig.update_layout(
             height=780, 
             margin=dict(l=10, r=10, t=30, b=10), 
             coloraxis_colorbar=dict(title="°C"),
             xaxis=dict(fixedrange=True, title="연도"),
             yaxis=dict(fixedrange=True, title="일"),
-            dragmode=False, # 커서를 일반 화살표로 유지하고 드래그 방지
+            dragmode=False,
             hovermode="closest"
         )
         
@@ -456,7 +456,9 @@ def run_tab2_analysis():
             hovertemplate="<b>%{x}년 " + str(sel_m) + "월 %{y}일</b><br>🌡️ 평균기온: %{z:.1f}℃<extra></extra>"
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        # [중요] st.plotly_chart에서 config로 모드바 숨김
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+        
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
 
     def temperature_supply_band_section(day_df, default_month, key_prefix):
