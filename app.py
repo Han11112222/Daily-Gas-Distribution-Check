@@ -62,18 +62,12 @@ def load_historical_data_common():
         df['val_gj'] = pd.to_numeric(df[col_mj], errors='coerce') / 1000.0
         df = df[df['val_gj'] > 0].copy()
         
-        # 평균기온 컬럼이 있으면 포함, 없으면 NaN으로 채움
-        if "평균기온(℃)" in df.columns:
-             df["평균기온(℃)"] = pd.to_numeric(df["평균기온(℃)"], errors='coerce')
-        else:
-             df["평균기온(℃)"] = np.nan
-
-        return df[['val_gj', col_date, '평균기온(℃)']].rename(columns={col_date: '일자'})
+        return df[['val_gj', col_date]].rename(columns={col_date: '일자'})
     except: return None
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (수정됨: 기온 입력 필드 추가 및 연동)
+# [탭 1] 도시가스 공급실적 관리 (수정됨: 랭킹 텍스트 크기 확대)
 # ==============================================================================
 def run_tab1_management():
     if 'tab1_df' not in st.session_state:
@@ -83,8 +77,7 @@ def run_tab1_management():
             '계획(GJ)': [222239],
             '실적(GJ)': [257365],
             '계획(m3)': [5221],
-            '실적(m3)': [6127],
-            '평균기온(℃)': [np.nan] # [수정] 초기 기온 데이터 추가 (NaN으로 초기화)
+            '실적(m3)': [6127]
         }
         st.session_state.tab1_df = pd.DataFrame(init_data)
 
@@ -134,6 +127,7 @@ def run_tab1_management():
         rate_gj = (current_val_gj / plan_val_gj * 100) if plan_val_gj > 0 else 0
         st.metric(label=f"일간 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
         st.caption(f"계획: {int(plan_val_gj):,} GJ")
+        # [수정] 랭킹 텍스트 크기 1.5배 확대 (HTML span 태그 사용)
         if rank_text:
             st.markdown(f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span>", unsafe_allow_html=True)
 
@@ -160,24 +154,20 @@ def run_tab1_management():
     st.info("💡 값을 수정하고 엔터(Enter)를 치면 상단 그래프와 랭킹이 즉시 업데이트됩니다.")
 
     mask_month_view = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
-    # [수정] 뷰 데이터프레임에 '평균기온(℃)' 컬럼 추가
     view_df = df.loc[mask_month_view].copy()
     
-    st.markdown("##### 1️⃣ 열량(GJ) 및 기온 입력")
-    # [수정] 데이터 에디터에 '평균기온(℃)' 컬럼 추가 및 설정
+    st.markdown("##### 1️⃣ 열량(GJ) 입력")
     edited_gj = st.data_editor(
-        view_df[['날짜', '계획(GJ)', '실적(GJ)', '평균기온(℃)']],
+        view_df[['날짜', '계획(GJ)', '실적(GJ)']],
         column_config={
             "날짜": st.column_config.DateColumn("공급일자", format="YYYY-MM-DD", disabled=True),
             "계획(GJ)": st.column_config.NumberColumn("계획(GJ)", format="%d", disabled=True),
             "실적(GJ)": st.column_config.NumberColumn("실적(GJ) ✏️", format="%d", min_value=0),
-            "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", format="%.1f", step=0.1), # 기온 입력 필드 설정
         },
         hide_index=True, use_container_width=True, key="editor_gj"
     )
 
-    # [수정] 변경된 데이터프레임과 원본 비교 로직 수정 ('평균기온(℃)' 포함)
-    if not edited_gj.equals(view_df[['날짜', '계획(GJ)', '실적(GJ)', '평균기온(℃)']]):
+    if not edited_gj.equals(view_df[['날짜', '계획(GJ)', '실적(GJ)']]):
         df.update(edited_gj)
         st.session_state.tab1_df = df
         st.rerun()
@@ -212,7 +202,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 하이라이트 카드에 탭1 입력 기온 반영)
+# [탭 2] 공급량 분석 (수정됨: 하이라이트 카드 축소 및 평균기온 추가)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -360,20 +350,12 @@ def run_tab2_analysis():
         if day_df.empty or month_df.empty: return
         act_col = "공급량(MJ)"
         if act_col not in day_df.columns: return
-        
-        # [수정] Tab 1에서 입력된 데이터(기온 포함) 병합
         if 'tab1_df' in st.session_state and st.session_state.tab1_df is not None:
             new_data = st.session_state.tab1_df.copy()
-            # 실적이 있는 데이터만 선택
-            new_data = new_data[new_data['실적(GJ)'] > 0].copy()
-            # 필요한 컬럼만 선택 및 이름 변경 (기온 포함)
-            new_data = new_data[['날짜', '실적(GJ)', '평균기온(℃)']]
-            new_data.columns = ['일자', act_col, '평균기온(℃)']
-            # GJ -> MJ 변환
+            new_data = new_data[new_data['실적(GJ)'] > 0][['날짜', '실적(GJ)']].copy()
+            new_data.columns = ['일자', act_col]
             new_data[act_col] = new_data[act_col] * 1000 
-            # 기존 day_df와 병합 (중복 시 최신 데이터 사용)
             day_df = pd.concat([day_df, new_data]).drop_duplicates(subset=['일자'], keep='last').sort_values('일자')
-
         df_all = day_df.copy()
         df_all["연"] = df_all["일자"].dt.year
         df_all["월"] = df_all["일자"].dt.month
@@ -438,7 +420,7 @@ def run_tab2_analysis():
                 rank_month = (month_vals_gj > max_val_gj).sum() + 1
                 target_date_str = f"{int(max_row['연'])}년 {int(max_row['월'])}월 {int(max_row['일'])}일"
                 
-                # [수정] 하이라이트 카드에 기온 표시 (탭 1에서 입력한 값 반영)
+                # [수정] 하이라이트 카드 축소(원복) 및 평균기온 추가
                 max_temp = max_row['평균기온(℃)']
                 temp_str = f"{max_temp:.1f}℃" if not pd.isna(max_temp) else "-"
 
