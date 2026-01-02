@@ -40,7 +40,7 @@ def set_korean_font():
 set_korean_font()
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수 1] 실적 데이터 로드 (Historical Actuals)
+# [공통 함수 1] 실적 데이터 로드
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_historical_data_common():
@@ -54,10 +54,8 @@ def load_historical_data_common():
         
         col_date = next((c for c in df.columns if "일자" in c or "date" in c.lower()), None)
         col_mj = next((c for c in df.columns if "실적" in c and ("MJ" in c or "GJ" in c)), None)
-        # 만약 '실적_공급량' 같은 명확한 이름이 없으면 '공급량'으로 시도
         if not col_mj:
              col_mj = next((c for c in df.columns if "공급량" in c and ("MJ" in c or "GJ" in c)), None)
-             
         col_m3 = next((c for c in df.columns if ("실적" in c or "공급량" in c) and ("M3" in c or "m3" in c)), None)
         
         if not col_date or not col_mj: return None
@@ -65,21 +63,17 @@ def load_historical_data_common():
         df[col_date] = pd.to_datetime(df[col_date], errors='coerce')
         df = df.dropna(subset=[col_date])
         
-        # GJ 변환
         df['val_gj'] = pd.to_numeric(df[col_mj], errors='coerce').fillna(0)
         if "MJ" in col_mj.upper():
             df['val_gj'] = df['val_gj'] / 1000.0
             
-        # m3 처리
         if col_m3:
             df['val_m3'] = pd.to_numeric(df[col_m3], errors='coerce').fillna(0)
         else:
             df['val_m3'] = 0
             
-        # 유효 실적이 있는 데이터만
         df = df[df['val_gj'] > 0].copy()
         
-        # 평균기온
         if "평균기온(℃)" in df.columns:
              df["평균기온(℃)"] = pd.to_numeric(df["평균기온(℃)"], errors='coerce')
         else:
@@ -89,7 +83,7 @@ def load_historical_data_common():
     except: return None
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수 2] 2026년 계획 데이터 로드 (Plan File) - [핵심 추가]
+# [공통 함수 2] 2026년 계획 데이터 로드
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_2026_plan_data_common():
@@ -114,7 +108,6 @@ def load_2026_plan_data_common():
             elif '월' in c: col_map['m'] = c
             elif '일' in c: col_map['d'] = c
             elif ('계획' in c or '예상' in c) and ('GJ' in c or 'MJ' in c): col_map['p_gj'] = c
-            # 부피 계획 컬럼이 있다면 찾기 (없을 수도 있음)
             elif ('계획' in c or '예상' in c) and ('m3' in c or 'M3' in c): col_map['p_m3'] = c
 
         df['날짜'] = pd.to_datetime({
@@ -124,17 +117,13 @@ def load_2026_plan_data_common():
         }, errors='coerce')
         df = df.dropna(subset=['날짜'])
         
-        # 계획값 추출
         df['plan_gj'] = pd.to_numeric(df[col_map.get('p_gj')], errors='coerce').fillna(0)
-        # 만약 단위가 MJ라면 GJ로 변환 (헤더에 MJ 포함 시)
         if col_map.get('p_gj') and "MJ" in col_map['p_gj'].upper():
              df['plan_gj'] = df['plan_gj'] / 1000.0
              
         if col_map.get('p_m3'):
             df['plan_m3'] = pd.to_numeric(df[col_map.get('p_m3')], errors='coerce').fillna(0)
         else:
-            # 부피 계획이 파일에 없으면 GJ 기반 추정 (42.0MJ/m3 가정) or 0
-            # 여기선 0으로 두고 Tab 1 로직에서 처리
             df['plan_m3'] = 0
             
         return df[['날짜', 'plan_gj', 'plan_m3']]
@@ -142,27 +131,21 @@ def load_2026_plan_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (수정됨: 계획값 근본적 해결 - 파일 연동)
+# [탭 1] 도시가스 공급실적 관리 (수정됨: NameError 해결)
 # ==============================================================================
 def run_tab1_management():
-    # 1. 데이터 초기화 (실적 파일 + 계획 파일 병합)
     if 'tab1_df' not in st.session_state:
-        df_hist = load_historical_data_common() # 실적 로드
-        
+        df_hist = load_historical_data_common()
         if df_hist is not None and not df_hist.empty:
-            # 기본 프레임 구성
             init_df = df_hist.rename(columns={
                 '일자': '날짜',
                 'val_gj': '실적(GJ)',
                 'val_m3': '실적(m3)'
             })
-            # 초기 계획값은 0으로 세팅 (아래에서 채움)
             init_df['계획(GJ)'] = 0
             init_df['계획(m3)'] = 0
-            
             st.session_state.tab1_df = init_df
         else:
-            # 파일 없으면 깡통 (2026-01-01)
             st.session_state.tab1_df = pd.DataFrame({
                 '날짜': [pd.to_datetime('2026-01-01')],
                 '계획(GJ)': [0], '실적(GJ)': [0],
@@ -179,16 +162,12 @@ def run_tab1_management():
 
     col_date, _ = st.columns([1, 4])
     with col_date:
-        # 최신 날짜 자동 선택 (실적이 있는 가장 최근 날짜)
         max_date = df[df['실적(GJ)'] > 0]['날짜'].max()
         if pd.isna(max_date): max_date = pd.to_datetime("2026-01-01")
         selected_date = st.date_input("조회 기준일", value=max_date)
     target_date = pd.to_datetime(selected_date)
 
-    # --------------------------------------------------------------------------
-    # [핵심] 선택된 날짜의 데이터 준비 (실적 + 계획 병합)
-    # --------------------------------------------------------------------------
-    # 1. 계획 파일에서 해당 날짜 계획 가져오기
+    # 1. 계획 데이터 가져오기
     df_plan_file = load_2026_plan_data_common()
     plan_gj_val = 0
     plan_m3_val = 0
@@ -198,19 +177,17 @@ def run_tab1_management():
         if not plan_row.empty:
             plan_gj_val = plan_row['plan_gj'].iloc[0]
             plan_m3_val = plan_row['plan_m3'].iloc[0]
-            # 만약 계획 파일에 부피가 없으면 대략 계산 (열량 / 42.2 * 1000 등, 여기선 0이면 0 유지)
 
-    # 2. 현재 데이터프레임(df)에서 해당 날짜 행 찾기
+    # 2. 현재 데이터 업데이트
     mask_day = df['날짜'] == target_date
     current_row = df[mask_day]
     
     if current_row.empty:
-        # 날짜 행이 없으면(신규 날짜) -> 새로 만들고 계획값 채워넣기
         new_row = pd.DataFrame([{
             '날짜': target_date,
-            '계획(GJ)': plan_gj_val, # 계획 파일 값 사용
+            '계획(GJ)': plan_gj_val,
             '실적(GJ)': 0,
-            '계획(m3)': plan_m3_val, # 계획 파일 값 사용
+            '계획(m3)': plan_m3_val,
             '실적(m3)': 0,
             '평균기온(℃)': np.nan
         }])
@@ -218,16 +195,12 @@ def run_tab1_management():
         st.session_state.tab1_df = df
         current_row = df[df['날짜'] == target_date]
     else:
-        # 날짜 행이 있으면 -> 계획값이 0인지 확인하고, 0이면 파일에서 가져온 값으로 업데이트
-        # (기존에 저장된 값이 0일 수도 있으니 업데이트)
         if current_row['계획(GJ)'].iloc[0] == 0 and plan_gj_val > 0:
             df.loc[mask_day, '계획(GJ)'] = plan_gj_val
             df.loc[mask_day, '계획(m3)'] = plan_m3_val
-            # 세션 업데이트
             st.session_state.tab1_df = df
-            current_row = df[mask_day] # 갱신된 행 다시 가져오기
+            current_row = df[mask_day]
 
-    # 화면 표시용 변수 추출
     current_val_gj = float(current_row['실적(GJ)'].iloc[0])
     plan_val_gj = float(current_row['계획(GJ)'].iloc[0])
     current_val_m3 = float(current_row['실적(m3)'].iloc[0])
@@ -245,12 +218,11 @@ def run_tab1_management():
             hist_month = df_hist[df_hist['일자'].dt.month == target_date.month]
             month_vals = pd.concat([hist_month['val_gj'], pd.Series([current_val_gj])])
             rank_month = (month_vals > current_val_gj).sum() + 1
-            
             firecracker = "🎉" if rank_all == 1 else ""
             rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
             if rank_all == 1: is_top_rank = True
 
-    # 화면 표시 (Metrics)
+    # KPI 화면 표시
     st.markdown("### 🔥 열량 실적 (GJ)")
     col_g1, col_g2, col_g3 = st.columns(3)
     
@@ -266,11 +238,10 @@ def run_tab1_management():
                 st.toast("🎉 축하합니다! 역대 최고 공급량(1위)을 달성했습니다! 🎆")
 
     with col_g2:
-        # 월간/연간 누적 (현재 df 기준 계산)
         mask_mtd = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month) & (df['날짜'] <= target_date)
         mtd_data = df[mask_mtd]
         a_mtd = mtd_data['실적(GJ)'].sum()
-        p_mtd = mtd_data['계획(GJ)'].sum() # 계획 파일에서 가져온 값들이 합산됨
+        p_mtd = mtd_data['계획(GJ)'].sum()
         rate_mtd = (a_mtd/p_mtd*100) if p_mtd > 0 else 0
         st.metric(label=f"월간 누적 달성률 {rate_mtd:.1f}%", value=f"{int(a_mtd):,} GJ", delta=f"{int(a_mtd-p_mtd):+,} GJ")
         st.caption(f"누적 계획: {int(p_mtd):,} GJ")
@@ -287,10 +258,6 @@ def run_tab1_management():
     st.markdown("---")
     st.markdown("### 💧 부피 실적 (천 m³)")
     col_m1, col_m2, col_m3 = st.columns(3)
-    
-    # 단위 보정: 화면 표시는 천m3
-    # 데이터가 m3 단위로 들어있다고 가정 (엑셀 로드 시 m3) -> 1000으로 나눔
-    # 만약 데이터가 이미 천m3이면 그대로 둠. 값의 크기로 판단 (10000 이상이면 m3로 간주)
     d_m3 = current_val_m3 / 1000 if current_val_m3 > 10000 else current_val_m3
     p_m3 = plan_val_m3 / 1000 if plan_val_m3 > 10000 else plan_val_m3
     
@@ -310,8 +277,11 @@ def run_tab1_management():
     st.subheader(f"📝 {target_date.month}월 실적 입력")
     st.info("💡 값을 수정하고 엔터(Enter)를 치면 상단 그래프와 랭킹이 즉시 업데이트됩니다.")
 
-    # 1. 열량 및 기온 입력
+    # [수정된 부분: NameError 해결을 위해 필터 변수 정의 위치 확인]
+    # 해당 월 데이터를 필터링하는 마스크 생성
+    mask_month_view = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
     view_df = df.loc[mask_month_view].copy()
+    
     st.markdown("##### 1️⃣ 열량(GJ) 및 기온 입력")
     edited_gj = st.data_editor(
         view_df[['날짜', '계획(GJ)', '실적(GJ)', '평균기온(℃)']],
@@ -331,10 +301,8 @@ def run_tab1_management():
 
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # 2. 부피 입력
     st.markdown("##### 2️⃣ 부피(천 m³) 입력")
     view_m3 = view_df[['날짜', '계획(m3)', '실적(m3)']].copy()
-    # 에디터 표시는 천단위
     view_m3['계획(천m3)'] = view_m3['계획(m3)'].apply(lambda x: int(x/1000) if x > 10000 else int(x))
     view_m3['실적(천m3)'] = view_m3['실적(m3)'].apply(lambda x: int(x/1000) if x > 10000 else int(x))
     
@@ -349,7 +317,6 @@ def run_tab1_management():
     )
 
     if not edited_m3.equals(view_m3[['날짜', '계획(천m3)', '실적(천m3)']]):
-        # 저장할 땐 m3 단위로 복구 (*1000)
         new_plan_m3 = edited_m3['계획(천m3)'] * 1000
         new_act_m3 = edited_m3['실적(천m3)'] * 1000
         df.loc[mask_month_view, '계획(m3)'] = new_plan_m3.values
@@ -365,7 +332,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (기존 완벽 버전 유지)
+# [탭 2] 공급량 분석 (기존 코드 유지)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
