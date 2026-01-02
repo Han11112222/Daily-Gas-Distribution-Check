@@ -131,7 +131,7 @@ def load_2026_plan_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리
+# [탭 1] 도시가스 공급실적 관리 (기존 완벽 버전 유지)
 # ==============================================================================
 def run_tab1_management():
     if 'tab1_df' not in st.session_state:
@@ -155,18 +155,14 @@ def run_tab1_management():
 
     df = st.session_state.tab1_df
 
-    # 계획 데이터 전체 자동 동기화
     df_plan_file = load_2026_plan_data_common()
     if df_plan_file is not None and not df_plan_file.empty:
         plan_gj_map = df_plan_file.set_index('날짜')['plan_gj']
         plan_m3_map = df_plan_file.set_index('날짜')['plan_m3']
-        
         mapped_gj = df['날짜'].map(plan_gj_map)
         df['계획(GJ)'] = np.where(df['계획(GJ)'] == 0, mapped_gj.fillna(0), df['계획(GJ)'])
-        
         mapped_m3 = df['날짜'].map(plan_m3_map)
         df['계획(m3)'] = np.where(df['계획(m3)'] == 0, mapped_m3.fillna(0), df['계획(m3)'])
-        
         st.session_state.tab1_df = df
 
     st.sidebar.header("📂 [관리] 데이터 파일")
@@ -331,7 +327,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 기온 매트릭스 툴팁 업그레이드)
+# [탭 2] 공급량 분석 (수정됨: 툴팁 개선 및 줌 잠금)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -444,11 +440,18 @@ def run_tab2_analysis():
         avg_row.index = ["평균"]
         pivot2 = pd.concat([pivot, avg_row], axis=0)
         fig = px.imshow(pivot2, aspect="auto", labels=dict(x="연도", y="일", color="°C"), color_continuous_scale="RdBu_r")
-        fig.update_layout(height=780, margin=dict(l=10, r=10, t=30, b=10), coloraxis_colorbar=dict(title="°C"))
         
-        # [수정] 툴팁 커스터마이징 (한글 표시)
+        # [수정] 툴팁 표시 및 줌 잠금(fixedrange)
+        fig.update_layout(
+            height=780, 
+            margin=dict(l=10, r=10, t=30, b=10), 
+            coloraxis_colorbar=dict(title="°C"),
+            xaxis=dict(fixedrange=True, title="연도"),
+            yaxis=dict(fixedrange=True, title="일")
+        )
+        # 툴팁 한글화: x=연도, y=일, z=기온
         fig.update_traces(
-            hovertemplate=f"<b>%{{x}}년 {sel_m}월 %{{y}}일</b><br>🌡️ 평균기온: %{{z:.1f}}℃<extra></extra>"
+            hovertemplate="<b>%{x}년 " + str(sel_m) + "월 %{y}일</b><br>🌡️ 평균기온: %{z:.1f}℃<extra></extra>"
         )
         
         st.plotly_chart(fig, use_container_width=True)
