@@ -327,7 +327,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: dragmode=False로 커서 고정)
+# [탭 2] 공급량 분석 (수정됨: 랭킹 카드 및 배너에 m3 추가)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -389,7 +389,7 @@ def run_tab2_analysis():
         if df.empty: return df
         df = df.copy()
         df["일자"] = pd.to_datetime(df["일자"], errors="coerce")
-        for c in ["공급량(MJ)", "공급량(M3)", "평균기온(℃)"]:
+        for c in ["공급량(MJ)", "공급량(M3)", "공급량(m3)", "평균기온(℃)"]:
             if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
         df = df.dropna(subset=["일자"])
         return df
@@ -411,11 +411,19 @@ def run_tab2_analysis():
     def _render_supply_top_card(rank, row, icon, gradient):
         date_str = f"{int(row['연'])}년 {int(row['월'])}월 {int(row['일'])}일"
         supply_str = f"{row['공급량_GJ']:,.1f} GJ"
+        
+        # [Han형님 요청 반영] m3 단위 추가 (천m3)
+        col_m3 = "공급량(M3)" if "공급량(M3)" in row.index else "공급량(m3)"
+        m3_val = row.get(col_m3, 0)
+        m3_str = f"{m3_val/1000:,.1f} 천m³"
+        
         temp_str = f"{row['평균기온(℃)']:.1f}℃" if not pd.isna(row["평균기온(℃)"]) else "-"
+        
         html = f"""<div style="border-radius:20px;padding:16px 20px;background:{gradient};box-shadow:0 4px 14px rgba(0,0,0,0.06);margin-top:8px;">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;"><div style="font-size:26px;">{icon}</div><div style="font-size:15px;font-weight:700;">최대 공급량 기록 {rank}위</div></div>
         <div style="font-size:14px;margin-bottom:3px;">📅 <b>{date_str}</b></div>
         <div style="font-size:14px;margin-bottom:3px;">🔥 공급량: <b>{supply_str}</b></div>
+        <div style="font-size:13px;margin-bottom:3px;color:#555;">📦 부피: <b>{m3_str}</b></div>
         <div style="font-size:14px;margin-bottom:6px;">🌡 평균기온: <b>{temp_str}</b></div>
         </div>"""
         st.markdown(html, unsafe_allow_html=True)
@@ -441,14 +449,13 @@ def run_tab2_analysis():
         pivot2 = pd.concat([pivot, avg_row], axis=0)
         fig = px.imshow(pivot2, aspect="auto", labels=dict(x="연도", y="일", color="°C"), color_continuous_scale="RdBu_r")
         
-        # [수정] dragmode=False 추가하여 손 모양 방지
         fig.update_layout(
             height=780, 
             margin=dict(l=10, r=10, t=30, b=10), 
             coloraxis_colorbar=dict(title="°C"),
             xaxis=dict(fixedrange=True, title="연도"),
             yaxis=dict(fixedrange=True, title="일"),
-            dragmode=False, # 드래그 모드 비활성화 (커서 기본 유지)
+            dragmode=False,
             hovermode="closest"
         )
         
@@ -456,7 +463,6 @@ def run_tab2_analysis():
             hovertemplate="<b>%{x}년 " + str(sel_m) + "월 %{y}일</b><br>🌡️ 평균기온: %{z:.1f}℃<extra></extra>"
         )
         
-        # [중요] config에서 모드바 숨기기
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
         
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
@@ -495,8 +501,8 @@ def run_tab2_analysis():
         if 'tab1_df' in st.session_state and st.session_state.tab1_df is not None:
             new_data = st.session_state.tab1_df.copy()
             new_data = new_data[new_data['실적(GJ)'] > 0].copy()
-            new_data = new_data[['날짜', '실적(GJ)', '평균기온(℃)']]
-            new_data.columns = ['일자', act_col, '평균기온(℃)']
+            new_data = new_data[['날짜', '실적(GJ)', '실적(m3)', '평균기온(℃)']] # m3 포함 로드
+            new_data.columns = ['일자', act_col, '공급량(M3)', '평균기온(℃)'] # 컬럼 매핑
             new_data[act_col] = new_data[act_col] * 1000 
             day_df = pd.concat([day_df, new_data]).drop_duplicates(subset=['일자'], keep='last').sort_values('일자')
         df_all = day_df.copy()
@@ -566,10 +572,14 @@ def run_tab2_analysis():
                 max_temp = max_row['평균기온(℃)']
                 temp_str = f"{max_temp:.1f}℃" if not pd.isna(max_temp) else "-"
 
+                # [Han형님 요청 반영] 배너에도 m3 추가
+                m3_col_name = "공급량(M3)" if "공급량(M3)" in max_row.index else "공급량(m3)"
+                max_val_m3 = max_row.get(m3_col_name, 0) / 1000.0
+
                 st.markdown(f"""<div style="background-color:#e0f2fe;padding:15px;border-radius:10px;border:1px solid #bae6fd;margin-bottom:20px;">
                     <h4 style="margin:0; color:#0369a1;">📢 {target_date_str} 실적 랭킹</h4>
                     <div style="font-size:16px; margin-top:5px; color:#333;">
-                        공급량: <b>{max_val_gj:,.1f} GJ</b> (🌡️ 평균기온: <b>{temp_str}</b>) 
+                        공급량: <b>{max_val_gj:,.1f} GJ</b> <span style="color:#666;font-size:0.9em;">(📦 {max_val_m3:,.1f} 천m³)</span> (🌡️ 평균기온: <b>{temp_str}</b>) <br>
                         ➡️ <span style="background-color:#fff; padding:2px 8px; border-radius:5px; border:1px solid #ddd; margin-left:25px;">🏆 역대 전체 <b>{rank_total}위</b></span> 
                         <span style="background-color:#fff; padding:2px 8px; border-radius:5px; border:1px solid #ddd; margin-left:5px;">📅 역대 {sel_month}월 중 <b>{rank_month}위</b></span>
                     </div>
