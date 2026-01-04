@@ -327,7 +327,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 랭킹 카드 및 배너에 m3 추가)
+# [탭 2] 공급량 분석 (수정됨: 랭킹 카드 글자 크기 확대)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -412,19 +412,20 @@ def run_tab2_analysis():
         date_str = f"{int(row['연'])}년 {int(row['월'])}월 {int(row['일'])}일"
         supply_str = f"{row['공급량_GJ']:,.1f} GJ"
         
-        # [Han형님 요청 반영] m3 단위 추가 (천m3)
+        # m3 단위 추가 (천m3)
         col_m3 = "공급량(M3)" if "공급량(M3)" in row.index else "공급량(m3)"
         m3_val = row.get(col_m3, 0)
         m3_str = f"{m3_val/1000:,.1f} 천m³"
         
         temp_str = f"{row['평균기온(℃)']:.1f}℃" if not pd.isna(row["평균기온(℃)"]) else "-"
         
+        # [수정됨] 폰트 크기 확대 (제목:19px, 아이콘:32px, 본문:18px/16px)
         html = f"""<div style="border-radius:20px;padding:16px 20px;background:{gradient};box-shadow:0 4px 14px rgba(0,0,0,0.06);margin-top:8px;">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;"><div style="font-size:26px;">{icon}</div><div style="font-size:15px;font-weight:700;">최대 공급량 기록 {rank}위</div></div>
-        <div style="font-size:14px;margin-bottom:3px;">📅 <b>{date_str}</b></div>
-        <div style="font-size:14px;margin-bottom:3px;">🔥 공급량: <b>{supply_str}</b></div>
-        <div style="font-size:13px;margin-bottom:3px;color:#555;">📦 부피: <b>{m3_str}</b></div>
-        <div style="font-size:14px;margin-bottom:6px;">🌡 평균기온: <b>{temp_str}</b></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;"><div style="font-size:32px;">{icon}</div><div style="font-size:19px;font-weight:700;">최대 공급량 기록 {rank}위</div></div>
+        <div style="font-size:18px;margin-bottom:4px;">📅 <b>{date_str}</b></div>
+        <div style="font-size:18px;margin-bottom:4px;">🔥 공급량: <b>{supply_str}</b></div>
+        <div style="font-size:16px;margin-bottom:4px;color:#555;">📦 부피: <b>{m3_str}</b></div>
+        <div style="font-size:18px;margin-bottom:8px;">🌡 평균기온: <b>{temp_str}</b></div>
         </div>"""
         st.markdown(html, unsafe_allow_html=True)
 
@@ -572,7 +573,6 @@ def run_tab2_analysis():
                 max_temp = max_row['평균기온(℃)']
                 temp_str = f"{max_temp:.1f}℃" if not pd.isna(max_temp) else "-"
 
-                # [Han형님 요청 반영] 배너에도 m3 추가
                 m3_col_name = "공급량(M3)" if "공급량(M3)" in max_row.index else "공급량(m3)"
                 max_val_m3 = max_row.get(m3_col_name, 0) / 1000.0
 
