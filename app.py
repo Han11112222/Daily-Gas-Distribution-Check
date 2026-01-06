@@ -10,12 +10,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # ─────────────────────────────────────────────────────────
-# [0] 페이지 기본 설정 및 구글 시트 URL 설정
+# [0] 페이지 기본 설정
 # ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="도시가스 통합 관리 시스템", layout="wide")
 
-# ✅ Han형님이 주신 구글 스프레드시트 링크를 여기에 적용했습니다.
+# 구글 시트 주소 (Han형님 링크)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1GLyrA8snj7ffku8ff-3nJ_G4tjBC6SRWBMOInadjgrQ/edit?usp=sharing"
+# 로컬(깃허브)에 있는 기본 실적 파일명
+DEFAULT_LOCAL_FILE = "공급량(계획_실적).xlsx"
 
 # [스타일] CSS 적용
 st.markdown("""
@@ -33,7 +35,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def set_korean_font():
-    # 폰트 설정 (로컬 환경용, 배포 시 시스템 폰트 사용)
     try:
         mpl.rcParams["axes.unicode_minus"] = False
         ttf = Path(__file__).parent / "NanumGothic-Regular.ttf"
@@ -45,59 +46,114 @@ def set_korean_font():
 set_korean_font()
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수 1] 실적 데이터 로드 (구글 시트 연동)
+# [공통 기능] 데이터 소스 선택기 (사이드바)
 # ─────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False, ttl=0)  # ttl=0: 캐시 없이 즉시 새로고침 반영
+st.sidebar.header("📡 데이터 원본 선택")
+data_source_option = st.sidebar.radio(
+    "어떤 데이터를 사용할까요?",
+    ("1. 구글 스프레드시트 (Live)", "2. 기본 파일 (GitHub)", "3. 직접 업로드 (Excel)")
+)
+
+uploaded_user_file = None
+if "직접 업로드" in data_source_option:
+    uploaded_user_file = st.sidebar.file_uploader("엑셀 파일 업로드 (.xlsx)", type=['xlsx'])
+
+# ─────────────────────────────────────────────────────────
+# [핵심] 유연한 데이터 로드 함수 (소스 선택에 따라 작동)
+# ─────────────────────────────────────────────────────────
+def load_data_flexible(sheet_name_pattern):
+    """
+    선택된 소스에 따라 데이터를 가져오는 통합 함수
+    sheet_name_pattern: '일별' 또는 '월별' 등 시트 이름을 찾기 위한 키워드
+    """
+    df = None
+    
+    # 1. 구글 스프레드시트
+    if "구글" in data_source_option:
+        try:
+            conn = st.connection("gsheets", type=GSheetsConnection)
+            # 시트 이름 매핑 ('일별' -> '일별실적', '월별' -> '월별계획_실적')
+            worksheet_name = "일별실적" if "일별" in sheet_name_pattern else "월별계획_실적"
+            df = conn.read(spreadsheet=SHEET_URL, worksheet=worksheet_name, ttl=0)
+            st.sidebar.success(f"✅ 구글시트({worksheet_name}) 연결 성공")
+        except Exception as e:
+            st.sidebar.error(f"⚠️ 구글 연결 실패. secrets 설정을 확인하거나 옵션을 변경하세요.\n({e})")
+            return None
+
+    # 2. 기본 파일 (GitHub / Local)
+    elif "기본 파일" in data_source_option:
+        path = Path(__file__).parent / DEFAULT_LOCAL_FILE
+        if path.exists():
+            try:
+                xls = pd.ExcelFile(path, engine="openpyxl")
+                # 시트 이름 찾기
+                target_sheet = next((s for s in xls.sheet_names if sheet_name_pattern in s), xls.sheet_names[0])
+                df = pd.read_excel(xls, sheet_name=target_sheet)
+                st.sidebar.info(f"📂 로컬 파일({DEFAULT_LOCAL_FILE}) 사용 중")
+            except Exception as e:
+                st.sidebar.error(f"로컬 파일 읽기 오류: {e}")
+        else:
+            st.sidebar.warning(f"⚠️ {DEFAULT_LOCAL_FILE} 파일이 경로에 없습니다.")
+
+    # 3. 직접 업로드
+    elif "직접 업로드" in data_source_option:
+        if uploaded_user_file is not None:
+            try:
+                xls = pd.ExcelFile(uploaded_user_file, engine="openpyxl")
+                target_sheet = next((s for s in xls.sheet_names if sheet_name_pattern in s), xls.sheet_names[0])
+                df = pd.read_excel(xls, sheet_name=target_sheet)
+                st.sidebar.success("📂 업로드된 파일 사용 중")
+            except Exception as e:
+                st.sidebar.error(f"업로드 파일 읽기 오류: {e}")
+        else:
+            st.sidebar.info("👈 엑셀 파일을 업로드해주세요.")
+            
+    return df
+
+# ─────────────────────────────────────────────────────────
+# [공통 함수 1] 실적 데이터 전처리 (소스 무관 공통 로직)
+# ─────────────────────────────────────────────────────────
 def load_historical_data_common():
-    try:
-        # 구글 시트 연결
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        
-        # '일별실적' 시트 읽기 (URL 사용)
-        df = conn.read(spreadsheet=SHEET_URL, worksheet="일별실적")
-        
-        # 컬럼명 공백 제거
-        df.columns = [str(c).replace(" ", "").strip() for c in df.columns]
-        
-        # 필수 컬럼 찾기
-        col_date = next((c for c in df.columns if "일자" in c or "date" in c.lower()), None)
-        col_mj = next((c for c in df.columns if "실적" in c and ("MJ" in c or "GJ" in c)), None)
-        if not col_mj:
-             col_mj = next((c for c in df.columns if "공급량" in c and ("MJ" in c or "GJ" in c)), None)
-        col_m3 = next((c for c in df.columns if ("실적" in c or "공급량" in c) and ("M3" in c or "m3" in c)), None)
-        
-        if not col_date or not col_mj: return None
-        
-        df[col_date] = pd.to_datetime(df[col_date], errors='coerce')
-        df = df.dropna(subset=[col_date])
-        
-        df['val_gj'] = pd.to_numeric(df[col_mj], errors='coerce').fillna(0)
-        
-        # 단위 변환 (MJ -> GJ)
-        if "MJ" in col_mj.upper():
-            df['val_gj'] = df['val_gj'] / 1000.0
-            
-        if col_m3:
-            df['val_m3'] = pd.to_numeric(df[col_m3], errors='coerce').fillna(0)
-        else:
-            df['val_m3'] = 0
-            
-        df = df[df['val_gj'] > 0].copy()
-        
-        if "평균기온(℃)" in df.columns:
-             df["평균기온(℃)"] = pd.to_numeric(df["평균기온(℃)"], errors='coerce')
-        else:
-             df["평균기온(℃)"] = np.nan
+    # 위에서 만든 유연한 로더 사용 ('일별'이 포함된 시트 찾기)
+    df = load_data_flexible("일별")
+    
+    if df is None or df.empty: return None
 
-        return df[['val_gj', 'val_m3', col_date, '평균기온(℃)']].rename(columns={col_date: '일자'})
-    except Exception as e:
-        st.error(f"구글 시트('일별실적') 로드 중 오류 발생: {e}")
-        return None
+    # 컬럼 정리 및 전처리
+    df.columns = [str(c).replace(" ", "").strip() for c in df.columns]
+    
+    col_date = next((c for c in df.columns if "일자" in c or "date" in c.lower()), None)
+    col_mj = next((c for c in df.columns if "실적" in c and ("MJ" in c or "GJ" in c)), None)
+    if not col_mj:
+            col_mj = next((c for c in df.columns if "공급량" in c and ("MJ" in c or "GJ" in c)), None)
+    col_m3 = next((c for c in df.columns if ("실적" in c or "공급량" in c) and ("M3" in c or "m3" in c)), None)
+    
+    if not col_date or not col_mj: return None
+    
+    df[col_date] = pd.to_datetime(df[col_date], errors='coerce')
+    df = df.dropna(subset=[col_date])
+    
+    df['val_gj'] = pd.to_numeric(df[col_mj], errors='coerce').fillna(0)
+    if "MJ" in col_mj.upper():
+        df['val_gj'] = df['val_gj'] / 1000.0
+        
+    if col_m3:
+        df['val_m3'] = pd.to_numeric(df[col_m3], errors='coerce').fillna(0)
+    else:
+        df['val_m3'] = 0
+        
+    df = df[df['val_gj'] > 0].copy()
+    
+    if "평균기온(℃)" in df.columns:
+            df["평균기온(℃)"] = pd.to_numeric(df["평균기온(℃)"], errors='coerce')
+    else:
+            df["평균기온(℃)"] = np.nan
+
+    return df[['val_gj', 'val_m3', col_date, '평균기온(℃)']].rename(columns={col_date: '일자'})
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수 2] 2026년 계획 데이터 로드 (로컬 파일 유지)
+# [공통 함수 2] 2026년 계획 데이터 (이건 변경 빈도가 낮아 로컬 유지 추천)
 # ─────────────────────────────────────────────────────────
-# 2026년 계획 파일은 변경이 적으므로 기존 엑셀 파일 로드 방식 유지
 @st.cache_data(show_spinner=False)
 def load_2026_plan_data_common():
     path = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
@@ -132,8 +188,8 @@ def load_2026_plan_data_common():
         
         df['plan_gj'] = pd.to_numeric(df[col_map.get('p_gj')], errors='coerce').fillna(0)
         if col_map.get('p_gj') and "MJ" in col_map['p_gj'].upper():
-             df['plan_gj'] = df['plan_gj'] / 1000.0
-             
+                df['plan_gj'] = df['plan_gj'] / 1000.0
+                
         if col_map.get('p_m3'):
             df['plan_m3'] = pd.to_numeric(df[col_map.get('p_m3')], errors='coerce').fillna(0)
         else:
@@ -147,8 +203,16 @@ def load_2026_plan_data_common():
 # [탭 1] 도시가스 공급실적 관리
 # ==============================================================================
 def run_tab1_management():
-    if 'tab1_df' not in st.session_state:
-        df_hist = load_historical_data_common()
+    # 데이터 로드 시도
+    df_hist = load_historical_data_common()
+    
+    # 데이터가 아예 없으면 경고 후 종료 (에러 방지)
+    if df_hist is None:
+        st.warning("⚠️ 데이터를 불러올 수 없습니다. 좌측 사이드바에서 '데이터 원본'을 변경해보세요.")
+        return
+
+    # 세션 상태 초기화 (데이터 소스가 바뀌면 초기화 필요할 수 있음)
+    if 'tab1_df' not in st.session_state or st.sidebar.button("데이터 새로고침"):
         if df_hist is not None and not df_hist.empty:
             init_df = df_hist.rename(columns={
                 '일자': '날짜',
@@ -159,15 +223,12 @@ def run_tab1_management():
             init_df['계획(m3)'] = 0.0
             st.session_state.tab1_df = init_df
         else:
-            st.session_state.tab1_df = pd.DataFrame({
-                '날짜': [pd.to_datetime('2026-01-01')],
-                '계획(GJ)': [0.0], '실적(GJ)': [0.0],
-                '계획(m3)': [0.0], '실적(m3)': [0.0],
-                '평균기온(℃)': [np.nan]
-            })
+             # 빈 데이터 프레임 생성
+            st.session_state.tab1_df = pd.DataFrame(columns=['날짜', '계획(GJ)', '실적(GJ)', '계획(m3)', '실적(m3)', '평균기온(℃)'])
 
     df = st.session_state.tab1_df
-
+    
+    # 2026 계획 데이터 매핑
     df_plan_file = load_2026_plan_data_common()
     if df_plan_file is not None and not df_plan_file.empty:
         plan_gj_map = df_plan_file.set_index('날짜')['plan_gj']
@@ -177,19 +238,21 @@ def run_tab1_management():
         mapped_m3 = df['날짜'].map(plan_m3_map)
         df['계획(m3)'] = np.where(df['계획(m3)'] == 0, mapped_m3.fillna(0), df['계획(m3)'])
         st.session_state.tab1_df = df
-
-    st.sidebar.header("📂 [관리] 데이터 파일")
-    st.sidebar.info("✅ 구글 스프레드시트('일별실적') 연동 중")
     
     st.title("🔥 도시가스 공급실적 관리")
 
     col_date, _ = st.columns([1, 4])
     with col_date:
-        max_date = df[df['실적(GJ)'] > 0]['날짜'].max()
+        if not df.empty and '실적(GJ)' in df.columns:
+            max_date = df[df['실적(GJ)'] > 0]['날짜'].max()
+        else:
+            max_date = pd.Timestamp("2026-01-01")
+            
         if pd.isna(max_date): max_date = pd.to_datetime("2026-01-01")
         selected_date = st.date_input("조회 기준일", value=max_date)
     target_date = pd.to_datetime(selected_date)
 
+    # 데이터가 없는 날짜 처리 로직
     mask_day = df['날짜'] == target_date
     current_row = df[mask_day]
     
@@ -218,15 +281,16 @@ def run_tab1_management():
     current_val_m3 = float(current_row['실적(m3)'].iloc[0])
     plan_val_m3 = float(current_row['계획(m3)'].iloc[0])
 
+    # 랭킹 산출 (소스 데이터 다시 로드)
     rank_text = ""
     is_top_rank = False
     if current_val_gj > 0:
-        df_hist = load_historical_data_common()
-        if df_hist is not None and not df_hist.empty:
-            df_hist = df_hist[df_hist['일자'] != target_date]
-            all_vals = pd.concat([df_hist['val_gj'], pd.Series([current_val_gj])])
+        df_rank = load_historical_data_common() # 랭킹용 원본 다시 로드
+        if df_rank is not None and not df_rank.empty:
+            df_rank = df_rank[df_rank['일자'] != target_date]
+            all_vals = pd.concat([df_rank['val_gj'], pd.Series([current_val_gj])])
             rank_all = (all_vals > current_val_gj).sum() + 1
-            hist_month = df_hist[df_hist['일자'].dt.month == target_date.month]
+            hist_month = df_rank[df_rank['일자'].dt.month == target_date.month]
             month_vals = pd.concat([hist_month['val_gj'], pd.Series([current_val_gj])])
             rank_month = (month_vals > current_val_gj).sum() + 1
             firecracker = "🎉" if rank_all == 1 else ""
@@ -285,7 +349,12 @@ def run_tab1_management():
 
     st.markdown("---")
     st.subheader(f"📝 {target_date.month}월 실적 입력")
-    st.info("💡 값을 수정하고 엔터(Enter)를 치면 상단 그래프와 랭킹이 즉시 업데이트됩니다. (주의: 여기서 수정한 값은 임시이며, 영구 저장을 위해선 엑셀을 다운받거나 DB 연동이 필요합니다.)")
+    
+    # 데이터 소스에 따른 안내 문구
+    if "구글" in data_source_option:
+        st.info("ℹ️ 현재 입력한 값은 임시이며, '새로고침' 시 구글 시트 원본 값으로 돌아갑니다. 영구 반영하려면 구글 시트에 직접 입력하세요.")
+    else:
+        st.info("ℹ️ 파일 모드입니다. 입력한 값은 이 화면에만 반영됩니다.")
 
     mask_month_view = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
     view_df = df.loc[mask_month_view].copy()
@@ -352,20 +421,10 @@ def run_tab2_analysis():
         if 2026 in years: return 2026
         return years[-1]
     
-    # [데이터 로드] 구글 시트에서 월별/일별 시트 읽기 (URL 사용)
-    @st.cache_data(show_spinner=True, ttl=600)
-    def load_gsheet_supply_data():
-        try:
-            conn = st.connection("gsheets", type=GSheetsConnection)
-            # 월별 계획_실적 로드
-            df_month = conn.read(spreadsheet=SHEET_URL, worksheet="월별계획_실적")
-            # 일별 실적 로드
-            df_day = conn.read(spreadsheet=SHEET_URL, worksheet="일별실적")
-            return df_month, df_day
-        except Exception as e:
-            st.error(f"구글 시트 로드 실패: {e}")
-            return pd.DataFrame(), pd.DataFrame()
-    
+    # [수정] 통합 로더 사용
+    month_df = load_data_flexible("월별")
+    day_df = load_data_flexible("일별")
+
     def load_2026_plan_file():
         try:
             path = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
@@ -395,7 +454,7 @@ def run_tab2_analysis():
         except: return None
 
     def clean_supply_month_df(df):
-        if df.empty: return df
+        if df is None or df.empty: return pd.DataFrame()
         df = df.copy()
         if "Unnamed: 0" in df.columns: df = df.drop(columns=["Unnamed: 0"])
         df["연"] = pd.to_numeric(df["연"], errors="coerce").astype("Int64")
@@ -408,7 +467,7 @@ def run_tab2_analysis():
         return df
 
     def clean_supply_day_df(df):
-        if df.empty: return df
+        if df is None or df.empty: return pd.DataFrame()
         df = df.copy()
         df.columns = [str(c).strip().replace(" ", "") for c in df.columns]
         
@@ -643,15 +702,14 @@ def run_tab2_analysis():
         temperature_supply_band_section(day_df, sel_month, key_prefix + "band_")
 
     st.sidebar.header("📂 [분석] 데이터 소스")
-    st.sidebar.success("✅ 구글 스프레드시트 연동 중")
+    
     st.title("📊 도시가스 공급량 분석 (일별)")
 
-    month_df, day_df = load_gsheet_supply_data()
     month_df = clean_supply_month_df(month_df)
     day_df = clean_supply_day_df(day_df)
 
     if month_df.empty or day_df.empty:
-        st.error("구글 스프레드시트에서 데이터를 가져올 수 없습니다. 시트 이름('월별계획_실적', '일별실적')을 확인해주세요.")
+        st.error("데이터를 불러올 수 없습니다. 좌측 사이드바에서 데이터 소스를 변경해보세요.")
     else:
         act_col_month = "실적_공급량(MJ)"
         if act_col_month not in month_df.columns:
