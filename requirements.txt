@@ -5,4 +5,4 @@ xlsxwriter
 matplotlib
 plotly
 numpy
-st-gsheets-connection
+statsmodels
