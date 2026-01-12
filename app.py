@@ -131,7 +131,7 @@ def load_2026_plan_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (수정됨: 랭킹 문구 줄바꿈 레이아웃 적용)
+# [탭 1] 도시가스 공급실적 관리 (수정됨: 랭킹 설명 문구 크기 및 색상 변경)
 # ==============================================================================
 def run_tab1_management():
     if 'tab1_df' not in st.session_state:
@@ -218,7 +218,6 @@ def run_tab1_management():
             rank_month = (month_vals > current_val_gj).sum() + 1
             firecracker = "🎉" if rank_all == 1 else ""
             
-            # [수정됨] 랭킹 텍스트 변수에는 '순위 정보'만 담습니다.
             rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
             
             if rank_all == 1: is_top_rank = True
@@ -232,11 +231,11 @@ def run_tab1_management():
         st.metric(label=f"일간 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
         st.caption(f"계획: {int(plan_val_gj):,} GJ")
         if rank_text:
-            # [수정됨] 랭킹 정보 출력 후, <br> 태그로 줄바꿈하여 하단에 설명 문구를 배치합니다.
+            # [수정됨] 글자 크기 150%, 색상 검정(black)으로 변경
             st.markdown(
                 f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span>"
                 f"<br>"
-                f"<span style='font-size: 14px; color: #555;'>(2014년 1월 1일 이후 랭킹)</span>", 
+                f"<span style='font-size: 150%; color: black;'>(2014년 1월 1일 이후 랭킹)</span>", 
                 unsafe_allow_html=True
             )
             
