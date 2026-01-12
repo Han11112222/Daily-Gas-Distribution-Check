@@ -131,7 +131,7 @@ def load_2026_plan_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (수정됨: 랭킹 문구 추가)
+# [탭 1] 도시가스 공급실적 관리 (수정됨: 랭킹 문구 줄바꿈 레이아웃 적용)
 # ==============================================================================
 def run_tab1_management():
     if 'tab1_df' not in st.session_state:
@@ -218,8 +218,8 @@ def run_tab1_management():
             rank_month = (month_vals > current_val_gj).sum() + 1
             firecracker = "🎉" if rank_all == 1 else ""
             
-            # [수정됨] 여기에 문구 추가
-            rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위 (2014년 1월 1일 이후 랭킹)"
+            # [수정됨] 랭킹 텍스트 변수에는 '순위 정보'만 담습니다.
+            rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
             
             if rank_all == 1: is_top_rank = True
 
@@ -232,7 +232,14 @@ def run_tab1_management():
         st.metric(label=f"일간 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
         st.caption(f"계획: {int(plan_val_gj):,} GJ")
         if rank_text:
-            st.markdown(f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span>", unsafe_allow_html=True)
+            # [수정됨] 랭킹 정보 출력 후, <br> 태그로 줄바꿈하여 하단에 설명 문구를 배치합니다.
+            st.markdown(
+                f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span>"
+                f"<br>"
+                f"<span style='font-size: 14px; color: #555;'>(2014년 1월 1일 이후 랭킹)</span>", 
+                unsafe_allow_html=True
+            )
+            
             if is_top_rank:
                 st.balloons()
                 st.toast("🎉 축하합니다! 역대 최고 공급량(1위)을 달성했습니다! 🎆")
@@ -330,7 +337,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 이전에 잘못 넣은 문구 삭제 및 원상복구)
+# [탭 2] 공급량 분석 (수정 없음)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -567,7 +574,6 @@ def run_tab2_analysis():
         if not month_all.empty:
             top_n = st.slider("표시할 순위 개수", 5, 50, 10, 5, key=f"{key_prefix}top_n")
             
-            # [수정됨] 기존에 잘못 들어간 랭킹 문구 삭제 및 원상복구
             st.markdown(f"#### 📅 {sel_month}월 기준 Top 랭킹")
             
             if not this_df.empty:
@@ -607,7 +613,6 @@ def run_tab2_analysis():
             st.dataframe(center_style(rank_df[["Rank", "공급량_GJ", "연", "월", "일", "평균기온(℃)"]].style.format({"공급량_GJ": "{:,.1f}", "평균기온(℃)": "{:,.1f}"})), use_container_width=True, hide_index=True)
             
             st.markdown("---")
-            # [수정됨] 기존에 잘못 들어간 랭킹 문구 삭제 및 원상복구
             st.markdown("#### 🏆 전체 기간 Top 랭킹")
             global_top = df_all.sort_values(act_col, ascending=False).head(top_n).copy()
             global_top["공급량_GJ"] = global_top[act_col] / 1000.0
