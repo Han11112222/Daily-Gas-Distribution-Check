@@ -15,17 +15,17 @@ st.set_page_config(page_title="도시가스 통합 관리 시스템", layout="wi
 
 # [스타일] CSS 적용
 st.markdown("""
-    <style>
-    div[data-testid="stMetric"] {
-        background-color: #F0F2F6;
-        border-radius: 10px;
-        padding: 15px;
-        min-height: 200px;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
+   <style>
+   div[data-testid="stMetric"] {
+       background-color: #F0F2F6;
+       border-radius: 10px;
+       padding: 15px;
+       min-height: 200px;
+       display: flex;
+       flex-direction: column;
+       justify-content: center;
     }
-    </style>
+   </style>
 """, unsafe_allow_html=True)
 
 def set_korean_font():
@@ -65,13 +65,13 @@ def load_historical_data_common():
         
         df['val_gj'] = pd.to_numeric(df[col_mj], errors='coerce').fillna(0)
         if "MJ" in col_mj.upper():
-            df['val_gj'] = df['val_gj'] / 1000.0
-            
+           df['val_gj'] = df['val_gj'] / 1000.0
+           
         if col_m3:
-            df['val_m3'] = pd.to_numeric(df[col_m3], errors='coerce').fillna(0)
+           df['val_m3'] = pd.to_numeric(df[col_m3], errors='coerce').fillna(0)
         else:
-            df['val_m3'] = 0
-            
+           df['val_m3'] = 0
+           
         df = df[df['val_gj'] > 0].copy()
         
         if "평균기온(℃)" in df.columns:
@@ -122,10 +122,10 @@ def load_2026_plan_data_common():
              df['plan_gj'] = df['plan_gj'] / 1000.0
              
         if col_map.get('p_m3'):
-            df['plan_m3'] = pd.to_numeric(df[col_map.get('p_m3')], errors='coerce').fillna(0)
+           df['plan_m3'] = pd.to_numeric(df[col_map.get('p_m3')], errors='coerce').fillna(0)
         else:
-            df['plan_m3'] = 0
-            
+           df['plan_m3'] = 0
+           
         return df[['날짜', 'plan_gj', 'plan_m3']]
     except: return None
 
@@ -327,7 +327,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 랭킹 카드 글자 크기 확대)
+# [탭 2] 공급량 분석 (수정됨: 랭킹 카드 글자 크기 확대 및 랭킹 헤더 문구 추가)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -571,7 +571,9 @@ def run_tab2_analysis():
         if not month_all.empty:
             top_n = st.slider("표시할 순위 개수", 5, 50, 10, 5, key=f"{key_prefix}top_n")
             
-            st.markdown(f"#### 📅 {sel_month}월 기준 Top 랭킹")
+            # [수정됨] 월별 랭킹 제목에 문구 추가
+            st.markdown(f"#### 📅 {sel_month}월 기준 Top 랭킹 (2014년 1월 1일 이후 랭킹)")
+            
             if not this_df.empty:
                 max_row = this_df.loc[this_df[act_col].idxmax()]
                 max_val_gj = max_row[act_col] / 1000.0
@@ -605,11 +607,12 @@ def run_tab2_analysis():
             icons, grads = ["🥇", "🥈", "🥉"], ["linear-gradient(120deg,#eff6ff,#fef9c3)", "linear-gradient(120deg,#f9fafb,#e5e7eb)", "linear-gradient(120deg,#fff7ed,#fef9c3)"]
             for i, (_, row) in enumerate(top3.iterrows()):
                 with cols[i]: 
-                    _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
+                   _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
             st.dataframe(center_style(rank_df[["Rank", "공급량_GJ", "연", "월", "일", "평균기온(℃)"]].style.format({"공급량_GJ": "{:,.1f}", "평균기온(℃)": "{:,.1f}"})), use_container_width=True, hide_index=True)
             
             st.markdown("---")
-            st.markdown("#### 🏆 전체 기간 Top 랭킹")
+            # [수정됨] 전체 기간 랭킹 제목에 문구 추가
+            st.markdown("#### 🏆 전체 기간 Top 랭킹 (2014년 1월 1일 이후 랭킹)")
             global_top = df_all.sort_values(act_col, ascending=False).head(top_n).copy()
             global_top["공급량_GJ"] = global_top[act_col] / 1000.0
             global_top.insert(0, "Rank", range(1, len(global_top) + 1))
@@ -619,7 +622,7 @@ def run_tab2_analysis():
             gcols = [gc1, gc2, gc3]
             for i, (_, row) in enumerate(g_top3.iterrows()):
                 with gcols[i]: 
-                    _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
+                   _render_supply_top_card(int(row["Rank"]), row, icons[i], grads[i])
             
             st.dataframe(center_style(global_top[["Rank", "공급량_GJ", "연", "월", "일", "평균기온(℃)"]].style.format({"공급량_GJ": "{:,.1f}", "평균기온(℃)": "{:,.1f}"})), use_container_width=True, hide_index=True)
 
