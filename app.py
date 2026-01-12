@@ -131,7 +131,7 @@ def load_2026_plan_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (완벽 유지)
+# [탭 1] 도시가스 공급실적 관리 (수정됨: 랭킹 문구 추가)
 # ==============================================================================
 def run_tab1_management():
     if 'tab1_df' not in st.session_state:
@@ -217,7 +217,10 @@ def run_tab1_management():
             month_vals = pd.concat([hist_month['val_gj'], pd.Series([current_val_gj])])
             rank_month = (month_vals > current_val_gj).sum() + 1
             firecracker = "🎉" if rank_all == 1 else ""
-            rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
+            
+            # [수정됨] 여기에 문구 추가
+            rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위 (2014년 1월 1일 이후 랭킹)"
+            
             if rank_all == 1: is_top_rank = True
 
     st.markdown("### 🔥 열량 실적 (GJ)")
@@ -327,7 +330,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 랭킹 카드 글자 크기 확대 및 랭킹 헤더 문구 추가)
+# [탭 2] 공급량 분석 (수정됨: 이전에 잘못 넣은 문구 삭제 및 원상복구)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -419,7 +422,6 @@ def run_tab2_analysis():
         
         temp_str = f"{row['평균기온(℃)']:.1f}℃" if not pd.isna(row["평균기온(℃)"]) else "-"
         
-        # [수정됨] 폰트 크기 확대 (제목:19px, 아이콘:32px, 본문:18px/16px)
         html = f"""<div style="border-radius:20px;padding:16px 20px;background:{gradient};box-shadow:0 4px 14px rgba(0,0,0,0.06);margin-top:8px;">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;"><div style="font-size:32px;">{icon}</div><div style="font-size:19px;font-weight:700;">최대 공급량 기록 {rank}위</div></div>
         <div style="font-size:18px;margin-bottom:4px;">📅 <b>{date_str}</b></div>
@@ -512,15 +514,9 @@ def run_tab2_analysis():
         df_all["일"] = df_all["일자"].dt.day
         this_df = df_all[(df_all["연"] == sel_year) & (df_all["월"] == sel_month)].copy()
 
-        # ======================================================================
-        # [Han형님 요청 수정사항]
-        # 최신 데이터(값이 존재하는 가장 최근 날짜) 이후의 0 데이터는 
-        # 그래프에 그리지 않도록 필터링하는 로직 추가
-        # ======================================================================
         last_valid_date = df_all[df_all[act_col] > 0]['일자'].max()
         if pd.notna(last_valid_date):
             this_df = this_df[this_df['일자'] <= last_valid_date]
-        # ======================================================================
 
         plan_df = load_2026_plan_file()
         plan_curve_x = []
@@ -571,8 +567,8 @@ def run_tab2_analysis():
         if not month_all.empty:
             top_n = st.slider("표시할 순위 개수", 5, 50, 10, 5, key=f"{key_prefix}top_n")
             
-            # [수정됨] 월별 랭킹 제목에 문구 추가
-            st.markdown(f"#### 📅 {sel_month}월 기준 Top 랭킹 (2014년 1월 1일 이후 랭킹)")
+            # [수정됨] 기존에 잘못 들어간 랭킹 문구 삭제 및 원상복구
+            st.markdown(f"#### 📅 {sel_month}월 기준 Top 랭킹")
             
             if not this_df.empty:
                 max_row = this_df.loc[this_df[act_col].idxmax()]
@@ -611,8 +607,8 @@ def run_tab2_analysis():
             st.dataframe(center_style(rank_df[["Rank", "공급량_GJ", "연", "월", "일", "평균기온(℃)"]].style.format({"공급량_GJ": "{:,.1f}", "평균기온(℃)": "{:,.1f}"})), use_container_width=True, hide_index=True)
             
             st.markdown("---")
-            # [수정됨] 전체 기간 랭킹 제목에 문구 추가
-            st.markdown("#### 🏆 전체 기간 Top 랭킹 (2014년 1월 1일 이후 랭킹)")
+            # [수정됨] 기존에 잘못 들어간 랭킹 문구 삭제 및 원상복구
+            st.markdown("#### 🏆 전체 기간 Top 랭킹")
             global_top = df_all.sort_values(act_col, ascending=False).head(top_n).copy()
             global_top["공급량_GJ"] = global_top[act_col] / 1000.0
             global_top.insert(0, "Rank", range(1, len(global_top) + 1))
