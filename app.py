@@ -511,6 +511,17 @@ def run_tab2_analysis():
         df_all["월"] = df_all["일자"].dt.month
         df_all["일"] = df_all["일자"].dt.day
         this_df = df_all[(df_all["연"] == sel_year) & (df_all["월"] == sel_month)].copy()
+
+        # ======================================================================
+        # [Han형님 요청 수정사항]
+        # 최신 데이터(값이 존재하는 가장 최근 날짜) 이후의 0 데이터는 
+        # 그래프에 그리지 않도록 필터링하는 로직 추가
+        # ======================================================================
+        last_valid_date = df_all[df_all[act_col] > 0]['일자'].max()
+        if pd.notna(last_valid_date):
+            this_df = this_df[this_df['일자'] <= last_valid_date]
+        # ======================================================================
+
         plan_df = load_2026_plan_file()
         plan_curve_x = []
         plan_curve_y = []
