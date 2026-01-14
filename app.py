@@ -44,7 +44,6 @@ set_korean_font()
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_historical_data_common():
-    # [수정] Path 객체 사용하여 경로 안정성 확보
     path = Path(__file__).parent / "공급량(계획_실적).xlsx"
     if not path.exists(): return None
     try:
@@ -88,7 +87,6 @@ def load_historical_data_common():
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_2026_plan_data_common():
-    # [수정] Path 객체 사용하여 경로 안정성 확보
     path = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
     if not path.exists(): return None
     try:
@@ -133,7 +131,7 @@ def load_2026_plan_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (로직 유지, 랭킹 문구 디자인 적용됨)
+# [탭 1] 도시가스 공급실적 관리
 # ==============================================================================
 def run_tab1_management():
     if 'tab1_df' not in st.session_state:
@@ -275,7 +273,7 @@ def run_tab1_management():
         a_mtd_m3 = mtd_data['실적(m3)'].sum()
         d_mtd_m3 = a_mtd_m3 / 1000 if a_mtd_m3 > 10000 else a_mtd_m3
         st.metric(label="월간 누적", value=f"{int(d_mtd_m3):,} (천 m³)")
-    with col_m3:
+    with col_m2:
         a_ytd_m3 = ytd_data['실적(m3)'].sum()
         d_ytd_m3 = a_ytd_m3 / 1000 if a_ytd_m3 > 10000 else a_ytd_m3
         st.metric(label="연간 누적", value=f"{int(d_ytd_m3):,} (천 m³)")
@@ -384,7 +382,7 @@ def run_tab2_analysis():
             return df[['날짜', 'plan_gj']].dropna()
         except: return None
 
-    # [신규] 월별 데이터 클리닝 함수 (참고 코드 기반)
+    # [신규] 월별 데이터 클리닝 함수
     def clean_supply_month_df(df):
         if df.empty: return df
         df = df.copy()
@@ -398,7 +396,7 @@ def run_tab2_analysis():
         df["월"] = df["월"].astype(int)
         return df
 
-    # [신규] 일별 데이터 클리닝 함수 (참고 코드 기반)
+    # [신규] 일별 데이터 클리닝 함수
     def clean_supply_day_df(df):
         if df.empty: return df
         df = df.copy()
@@ -503,13 +501,19 @@ def run_tab2_analysis():
         
         sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False)
         
-        grp = sub.groupby("기온구간", as_index=False, observed=True).agg(
+        # [수정] string으로 변환하여 merge 이슈 방지 및 정렬 확실화
+        sub["기온구간"] = sub["기온구간"].astype(str)
+        
+        grp = sub.groupby("기온구간", as_index=False).agg(
             평균공급량_GJ=(act_col, lambda x: x.mean() / 1000.0), 
             일수=(act_col, "count")
         )
         
+        # [수정] 빈 껍데기(labels)와 merge하여 모든 구간 표시
         full_bands = pd.DataFrame({"기온구간": labels})
         grp = pd.merge(full_bands, grp, on="기온구간", how="left").fillna(0)
+        
+        # [수정] Categorical을 이용하여 정렬 순서 강제
         grp["기온구간"] = pd.Categorical(grp["기온구간"], categories=labels, ordered=True)
         grp = grp.sort_values("기온구간")
         
