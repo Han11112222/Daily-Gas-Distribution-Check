@@ -131,7 +131,7 @@ def load_2026_plan_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리 (수정됨: 랭킹 설명 문구 크기 및 색상 변경)
+# [탭 1] 도시가스 공급실적 관리
 # ==============================================================================
 def run_tab1_management():
     if 'tab1_df' not in st.session_state:
@@ -335,7 +335,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 기온구간 그래프/테이블 정렬 로직 보완)
+# [탭 2] 공급량 분석 (수정됨: 기온구간 완전 표시 보장)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -504,12 +504,21 @@ def run_tab2_analysis():
             일수=(act_col, "count")
         )
         
-        # [수정] 데이터가 존재하는 구간만 명확히 남기고, 기온구간 순서대로 정렬
-        grp = grp.sort_values(by="기온구간")
+        # [수정] 모든 기온 구간이 X축에 표시되도록, 빈 껍데기(labels) 데이터프레임과 병합(merge)
+        # 1. 기준이 되는 모든 기온 구간(labels)을 담은 DataFrame 생성
+        full_bands = pd.DataFrame({"기온구간": labels})
         
-        # [수정] Plotly 그래프에서 x축 순서가 꼬이지 않도록 category_orders 명시
+        # 2. 실제 데이터(grp)를 기준 데이터(full_bands)에 병합 (Left Join)
+        #    이렇게 하면 데이터가 없는 기온 구간도 행으로 살아남음
+        grp = pd.merge(full_bands, grp, on="기온구간", how="left")
+        
+        # 3. 비어있는 값(NaN)을 0으로 채움 (공급량 0, 일수 0)
+        grp = grp.fillna(0)
+        
+        # [수정] Plotly 그래프 그리기
+        # category_orders를 사용하여 X축 순서가 labels 순서대로 고정되게 함
         fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수",
-                     category_orders={"기온구간": labels})  # <-- 여기가 핵심 수정 포인트!
+                     category_orders={"기온구간": labels})
                      
         fig.update_layout(xaxis_title="기온 구간", yaxis_title="평균 공급량 (GJ)", margin=dict(l=10, r=10, t=40, b=10))
         fig.update_traces(texttemplate="%{text}일", textposition="outside")
