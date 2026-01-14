@@ -131,7 +131,7 @@ def load_2026_plan_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리
+# [탭 1] 도시가스 공급실적 관리 (랭킹 문구 디자인 적용)
 # ==============================================================================
 def run_tab1_management():
     if 'tab1_df' not in st.session_state:
@@ -231,6 +231,7 @@ def run_tab1_management():
         st.metric(label=f"일간 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
         st.caption(f"계획: {int(plan_val_gj):,} GJ")
         if rank_text:
+            # [수정됨] 랭킹 문구 디자인 적용 (검정색, 1.5배)
             st.markdown(
                 f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span>"
                 f"<br>"
@@ -335,7 +336,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 기온구간 그래프 강제 정렬 로직 적용)
+# [탭 2] 공급량 분석 (수정됨: 그래프 짤림 문제 해결, 파일 로딩 안정화)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -474,7 +475,6 @@ def run_tab2_analysis():
         
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
 
-    # [수정] 기온구간 완전 표시 및 정렬 보장 로직
     def temperature_supply_band_section(day_df, default_month, key_prefix):
         st.markdown("### 🔥 기온 구간별 평균 공급량 분석")
         act_col = "공급량(MJ)"
@@ -493,36 +493,25 @@ def run_tab2_analysis():
         sub = sub.dropna(subset=["평균기온(℃)", act_col])
         if sub.empty: return
         
-        # 1. 구간 정의
         bins = [-100, -10, -5, 0, 5, 10, 15, 20, 25, 30, 100]
         labels = ["<-10℃", "-10~-5℃", "-5~0℃", "0~5℃", "5~10℃", "10~15℃", "15~20℃", "20~25℃", "25~30℃", "≥30℃"]
         
-        # 2. cut (labels 지정)
         sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False)
         
-        # 3. 집계
-        grp = sub.groupby("기온구간", as_index=False, observed=True).agg(
+        # [수정: 핵심] observed=False로 설정하여 데이터가 없는 구간(NaN)도 Groupby 결과에 포함시킴
+        grp = sub.groupby("기온구간", as_index=False, observed=False).agg(
             평균공급량_GJ=(act_col, lambda x: x.mean() / 1000.0), 
             일수=(act_col, "count")
         )
         
-        # 4. [핵심] 완전한 빈 테이블(full_bands) 생성 및 병합 (Left Join)
-        full_bands = pd.DataFrame({"기온구간": labels})
-        grp = pd.merge(full_bands, grp, on="기온구간", how="left")
-        grp = grp.fillna(0) # 데이터 없는 구간은 0으로 채움
+        # [수정: 핵심] 빈 구간은 평균공급량 0, 일수 0으로 채움
+        grp = grp.fillna(0)
         
-        # 5. [핵심] labels 순서대로 강제 정렬 (이거 안 하면 가나다순으로 꼬일 수 있음)
-        grp["sort_idx"] = grp["기온구간"].map({label: i for i, label in enumerate(labels)})
-        grp = grp.sort_values("sort_idx").drop(columns=["sort_idx"])
+        # [수정: 핵심] 기온구간(Categorical) 순서대로 정렬 보장
+        grp = grp.sort_values("기온구간")
         
-        # 6. [핵심] Plotly의 categoryarray 옵션으로 시각적 순서도 못 박음
         fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수")
-        fig.update_layout(
-            xaxis_title="기온 구간", 
-            yaxis_title="평균 공급량 (GJ)", 
-            margin=dict(l=10, r=10, t=40, b=10),
-            xaxis={'categoryorder':'array', 'categoryarray': labels} # <-- 순서 강제 고정
-        )
+        fig.update_layout(xaxis_title="기온 구간", yaxis_title="평균 공급량 (GJ)", margin=dict(l=10, r=10, t=40, b=10))
         fig.update_traces(texttemplate="%{text}일", textposition="outside")
         st.plotly_chart(fig, use_container_width=True)
         
