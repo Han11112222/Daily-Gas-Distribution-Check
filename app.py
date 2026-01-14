@@ -335,7 +335,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 기온구간 완전 표시 보장)
+# [탭 2] 공급량 분석 (수정됨: 기온구간 완전 표시 보장 및 정렬)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -498,25 +498,21 @@ def run_tab2_analysis():
         
         sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False)
         
-        # [수정] 기온구간(Categorical)이 정렬 순서대로 집계되도록 observed=True/False 유의
+        # [수정] 기온구간 집계
         grp = sub.groupby("기온구간", as_index=False, observed=True).agg(
             평균공급량_GJ=(act_col, lambda x: x.mean() / 1000.0), 
             일수=(act_col, "count")
         )
         
-        # [수정] 모든 기온 구간이 X축에 표시되도록, 빈 껍데기(labels) 데이터프레임과 병합(merge)
-        # 1. 기준이 되는 모든 기온 구간(labels)을 담은 DataFrame 생성
+        # [수정] 모든 기온 구간을 강제로 포함시키기 위해 빈 DataFrame과 병합
         full_bands = pd.DataFrame({"기온구간": labels})
+        grp = pd.merge(full_bands, grp, on="기온구간", how="left").fillna(0)
         
-        # 2. 실제 데이터(grp)를 기준 데이터(full_bands)에 병합 (Left Join)
-        #    이렇게 하면 데이터가 없는 기온 구간도 행으로 살아남음
-        grp = pd.merge(full_bands, grp, on="기온구간", how="left")
+        # [수정] 정렬 순서 강제 (Categorical 활용)
+        grp["기온구간"] = pd.Categorical(grp["기온구간"], categories=labels, ordered=True)
+        grp = grp.sort_values("기온구간")
         
-        # 3. 비어있는 값(NaN)을 0으로 채움 (공급량 0, 일수 0)
-        grp = grp.fillna(0)
-        
-        # [수정] Plotly 그래프 그리기
-        # category_orders를 사용하여 X축 순서가 labels 순서대로 고정되게 함
+        # [수정] 그래프 그리기 (category_orders 명시)
         fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수",
                      category_orders={"기온구간": labels})
                      
@@ -524,7 +520,7 @@ def run_tab2_analysis():
         fig.update_traces(texttemplate="%{text}일", textposition="outside")
         st.plotly_chart(fig, use_container_width=True)
         
-        # 테이블 표시
+        # 표 출력
         display_tbl = grp.rename(columns={"평균공급량_GJ": "평균공급량(GJ)"})
         st.dataframe(center_style(display_tbl.style.format({"평균공급량(GJ)": "{:,.1f}"})), use_container_width=True, hide_index=True)
 
