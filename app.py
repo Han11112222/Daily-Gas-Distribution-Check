@@ -40,7 +40,7 @@ def set_korean_font():
 set_korean_font()
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수 1] 실적 데이터 로드 (Path 적용)
+# [공통 함수 1] 실적 데이터 로드
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_historical_data_common():
@@ -83,7 +83,7 @@ def load_historical_data_common():
     except: return None
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수 2] 2026년 계획 데이터 로드 (Path 적용)
+# [공통 함수 2] 2026년 계획 데이터 로드
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_2026_plan_data_common():
@@ -273,7 +273,7 @@ def run_tab1_management():
         a_mtd_m3 = mtd_data['실적(m3)'].sum()
         d_mtd_m3 = a_mtd_m3 / 1000 if a_mtd_m3 > 10000 else a_mtd_m3
         st.metric(label="월간 누적", value=f"{int(d_mtd_m3):,} (천 m³)")
-    with col_m2:
+    with col_m3:
         a_ytd_m3 = ytd_data['실적(m3)'].sum()
         d_ytd_m3 = a_ytd_m3 / 1000 if a_ytd_m3 > 10000 else a_ytd_m3
         st.metric(label="연간 누적", value=f"{int(d_ytd_m3):,} (천 m³)")
@@ -335,7 +335,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 파일 로딩 안정성 강화 및 그래프/정렬 로직 보완)
+# [탭 2] 공급량 분석 (수정됨: 기온구간 그래프 강제 정렬 로직 적용)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -347,13 +347,11 @@ def run_tab2_analysis():
         if 2026 in years: return 2026
         return years[-1]
 
-    # [수정] 파일 로딩 함수 보강 (Path 및 openpyxl 사용)
     def load_supply_sheets(excel_bytes):
         xls = pd.ExcelFile(io.BytesIO(excel_bytes), engine="openpyxl")
         return (xls.parse("월별계획_실적") if "월별계획_실적" in xls.sheet_names else pd.DataFrame(),
                 xls.parse("일별실적") if "일별실적" in xls.sheet_names else pd.DataFrame())
     
-    # [수정] 2026 계획 로딩 (Path 사용)
     def load_2026_plan_file():
         try:
             path = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
@@ -382,7 +380,6 @@ def run_tab2_analysis():
             return df[['날짜', 'plan_gj']].dropna()
         except: return None
 
-    # [신규] 월별 데이터 클리닝 함수
     def clean_supply_month_df(df):
         if df.empty: return df
         df = df.copy()
@@ -396,7 +393,6 @@ def run_tab2_analysis():
         df["월"] = df["월"].astype(int)
         return df
 
-    # [신규] 일별 데이터 클리닝 함수
     def clean_supply_day_df(df):
         if df.empty: return df
         df = df.copy()
@@ -478,6 +474,7 @@ def run_tab2_analysis():
         
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
 
+    # [수정] 기온구간 완전 표시 및 정렬 보장 로직
     def temperature_supply_band_section(day_df, default_month, key_prefix):
         st.markdown("### 🔥 기온 구간별 평균 공급량 분석")
         act_col = "공급량(MJ)"
@@ -496,31 +493,36 @@ def run_tab2_analysis():
         sub = sub.dropna(subset=["평균기온(℃)", act_col])
         if sub.empty: return
         
+        # 1. 구간 정의
         bins = [-100, -10, -5, 0, 5, 10, 15, 20, 25, 30, 100]
         labels = ["<-10℃", "-10~-5℃", "-5~0℃", "0~5℃", "5~10℃", "10~15℃", "15~20℃", "20~25℃", "25~30℃", "≥30℃"]
         
+        # 2. cut (labels 지정)
         sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False)
         
-        # [수정] string으로 변환하여 merge 이슈 방지 및 정렬 확실화
-        sub["기온구간"] = sub["기온구간"].astype(str)
-        
-        grp = sub.groupby("기온구간", as_index=False).agg(
+        # 3. 집계
+        grp = sub.groupby("기온구간", as_index=False, observed=True).agg(
             평균공급량_GJ=(act_col, lambda x: x.mean() / 1000.0), 
             일수=(act_col, "count")
         )
         
-        # [수정] 빈 껍데기(labels)와 merge하여 모든 구간 표시
+        # 4. [핵심] 완전한 빈 테이블(full_bands) 생성 및 병합 (Left Join)
         full_bands = pd.DataFrame({"기온구간": labels})
-        grp = pd.merge(full_bands, grp, on="기온구간", how="left").fillna(0)
+        grp = pd.merge(full_bands, grp, on="기온구간", how="left")
+        grp = grp.fillna(0) # 데이터 없는 구간은 0으로 채움
         
-        # [수정] Categorical을 이용하여 정렬 순서 강제
-        grp["기온구간"] = pd.Categorical(grp["기온구간"], categories=labels, ordered=True)
-        grp = grp.sort_values("기온구간")
+        # 5. [핵심] labels 순서대로 강제 정렬 (이거 안 하면 가나다순으로 꼬일 수 있음)
+        grp["sort_idx"] = grp["기온구간"].map({label: i for i, label in enumerate(labels)})
+        grp = grp.sort_values("sort_idx").drop(columns=["sort_idx"])
         
-        fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수",
-                     category_orders={"기온구간": labels})
-                     
-        fig.update_layout(xaxis_title="기온 구간", yaxis_title="평균 공급량 (GJ)", margin=dict(l=10, r=10, t=40, b=10))
+        # 6. [핵심] Plotly의 categoryarray 옵션으로 시각적 순서도 못 박음
+        fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수")
+        fig.update_layout(
+            xaxis_title="기온 구간", 
+            yaxis_title="평균 공급량 (GJ)", 
+            margin=dict(l=10, r=10, t=40, b=10),
+            xaxis={'categoryorder':'array', 'categoryarray': labels} # <-- 순서 강제 고정
+        )
         fig.update_traces(texttemplate="%{text}일", textposition="outside")
         st.plotly_chart(fig, use_container_width=True)
         
