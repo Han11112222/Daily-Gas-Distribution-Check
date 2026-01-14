@@ -335,7 +335,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: TypeError 해결 및 정렬 보장)
+# [탭 2] 공급량 분석
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -474,7 +474,7 @@ def run_tab2_analysis():
         
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
 
-    # [수정: 핵심 함수] 기온구간 완전 표시 및 정렬 보장 로직 (TypeError 방지)
+    # [수정] 기온구간 그래프 - observed=False를 통해 모든 구간 강제 표시 (형님 코드 기반)
     def temperature_supply_band_section(day_df, default_month, key_prefix):
         st.markdown("### 🔥 기온 구간별 평균 공급량 분석")
         act_col = "공급량(MJ)"
@@ -493,40 +493,23 @@ def run_tab2_analysis():
         sub = sub.dropna(subset=["평균기온(℃)", act_col])
         if sub.empty: return
         
-        # 1. 구간 및 레이블 정의
         bins = [-100, -10, -5, 0, 5, 10, 15, 20, 25, 30, 100]
         labels = ["<-10℃", "-10~-5℃", "-5~0℃", "0~5℃", "5~10℃", "10~15℃", "15~20℃", "20~25℃", "25~30℃", "≥30℃"]
         
-        # 2. [수정: 핵심] cut 결과를 바로 string으로 변환! (Categorical 타입으로 인한 fillna 에러 원천 차단)
-        sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False).astype(str)
+        sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False)
         
-        # 3. 집계 (이제 string 컬럼이므로 observed=True/False 이슈 없음)
-        grp = sub.groupby("기온구간", as_index=False).agg(
+        # [핵심 수정] observed=False를 사용하여 데이터가 없는 구간도 Groupby 결과에 포함 (0으로 잡힘)
+        # 이렇게 하면 fillna나 merge 없이도 Categorical 속성을 이용해 빈 구간을 살릴 수 있습니다.
+        grp = sub.groupby("기온구간", as_index=False, observed=False).agg(
             평균공급량_GJ=(act_col, lambda x: x.mean() / 1000.0), 
             일수=(act_col, "count")
         )
         
-        # 4. 빈 껍데기(labels)와 병합하여 모든 구간 확보 (Left Join)
-        full_bands = pd.DataFrame({"기온구간": labels})
-        grp = pd.merge(full_bands, grp, on="기온구간", how="left")
+        # 빈 구간은 NaN으로 나오므로 0으로 채움
+        grp = grp.fillna(0)
         
-        # 5. [수정: 핵심] 안전하게 0으로 채우기 (이제 데이터 타입 충돌 없음)
-        grp["평균공급량_GJ"] = grp["평균공급량_GJ"].fillna(0)
-        grp["일수"] = grp["일수"].fillna(0)
-        
-        # 6. [수정: 핵심] 순서 재주입 (Categorical로 변환하여 정렬)
-        grp["기온구간"] = pd.Categorical(grp["기온구간"], categories=labels, ordered=True)
-        grp = grp.sort_values("기온구간")
-        
-        # 7. 그래프 그리기 (category_orders로 시각적 순서도 못 박음)
-        fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수",
-                     category_orders={"기온구간": labels})
-                     
-        fig.update_layout(
-            xaxis_title="기온 구간", 
-            yaxis_title="평균 공급량 (GJ)", 
-            margin=dict(l=10, r=10, t=40, b=10)
-        )
+        fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수")
+        fig.update_layout(xaxis_title="기온 구간", yaxis_title="평균 공급량 (GJ)", margin=dict(l=10, r=10, t=40, b=10))
         fig.update_traces(texttemplate="%{text}일", textposition="outside")
         st.plotly_chart(fig, use_container_width=True)
         
