@@ -231,7 +231,6 @@ def run_tab1_management():
         st.metric(label=f"일간 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
         st.caption(f"계획: {int(plan_val_gj):,} GJ")
         if rank_text:
-            # [수정됨] 글자 크기 150%, 색상 검정(black)으로 변경
             st.markdown(
                 f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span>"
                 f"<br>"
@@ -336,7 +335,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정 없음)
+# [탭 2] 공급량 분석 (수정됨: 기온구간 그래프/테이블 정렬 로직 보완)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -489,18 +488,36 @@ def run_tab2_analysis():
         c1, c2 = st.columns([2, 1.2])
         with c1: yr_range = st.slider("연도 범위(공급량 분석)", min_value=min_y, max_value=max_y, value=(max(min_y, max_y - 4), max_y), step=1, key=f"{key_prefix}yr_range")
         with c2: sel_m = st.selectbox("월 선택(공급량 분석)", options=list(range(1, 13)), index=default_month - 1, key=f"{key_prefix}month")
+        
         sub = df[(df["연"].between(yr_range[0], yr_range[1])) & (df["월"] == sel_m)].copy()
         sub = sub.dropna(subset=["평균기온(℃)", act_col])
         if sub.empty: return
+        
         bins = [-100, -10, -5, 0, 5, 10, 15, 20, 25, 30, 100]
         labels = ["<-10℃", "-10~-5℃", "-5~0℃", "0~5℃", "5~10℃", "10~15℃", "15~20℃", "20~25℃", "25~30℃", "≥30℃"]
+        
         sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False)
-        grp = sub.groupby("기온구간", as_index=False).agg(평균공급량_GJ=(act_col, lambda x: x.mean() / 1000.0), 일수=(act_col, "count")).dropna(subset=["기온구간"])
-        fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수")
+        
+        # [수정] 기온구간(Categorical)이 정렬 순서대로 집계되도록 observed=True/False 유의
+        grp = sub.groupby("기온구간", as_index=False, observed=True).agg(
+            평균공급량_GJ=(act_col, lambda x: x.mean() / 1000.0), 
+            일수=(act_col, "count")
+        )
+        
+        # [수정] 데이터가 존재하는 구간만 명확히 남기고, 기온구간 순서대로 정렬
+        grp = grp.sort_values(by="기온구간")
+        
+        # [수정] Plotly 그래프에서 x축 순서가 꼬이지 않도록 category_orders 명시
+        fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수",
+                     category_orders={"기온구간": labels})  # <-- 여기가 핵심 수정 포인트!
+                     
         fig.update_layout(xaxis_title="기온 구간", yaxis_title="평균 공급량 (GJ)", margin=dict(l=10, r=10, t=40, b=10))
         fig.update_traces(texttemplate="%{text}일", textposition="outside")
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(center_style(grp.rename(columns={"평균공급량_GJ": "평균공급량(GJ)"}).style.format({"평균공급량(GJ)": "{:,.1f}"})), use_container_width=True, hide_index=True)
+        
+        # 테이블 표시
+        display_tbl = grp.rename(columns={"평균공급량_GJ": "평균공급량(GJ)"})
+        st.dataframe(center_style(display_tbl.style.format({"평균공급량(GJ)": "{:,.1f}"})), use_container_width=True, hide_index=True)
 
     def supply_daily_main_logic(day_df, month_df, sel_year, sel_month, key_prefix):
         st.markdown("## 📅 공급량 분석(일)")
