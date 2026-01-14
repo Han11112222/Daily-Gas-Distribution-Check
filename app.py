@@ -335,7 +335,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: TypeError 해결 및 정렬 고정)
+# [탭 2] 공급량 분석
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -474,7 +474,7 @@ def run_tab2_analysis():
         
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
 
-    # [수정: 완벽 해결] 기온구간 완전 표시 및 정렬 보장 로직 (TypeError 방지)
+    # [수정: 완벽 해결] 빈 껍데기(Template) 생성 및 병합으로 안정성 확보
     def temperature_supply_band_section(day_df, default_month, key_prefix):
         st.markdown("### 🔥 기온 구간별 평균 공급량 분석")
         act_col = "공급량(MJ)"
@@ -493,28 +493,41 @@ def run_tab2_analysis():
         sub = sub.dropna(subset=["평균기온(℃)", act_col])
         if sub.empty: return
         
+        # 1. 구간 및 레이블 정의
         bins = [-100, -10, -5, 0, 5, 10, 15, 20, 25, 30, 100]
         labels = ["<-10℃", "-10~-5℃", "-5~0℃", "0~5℃", "5~10℃", "10~15℃", "15~20℃", "20~25℃", "25~30℃", "≥30℃"]
         
-        sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False)
+        # 2. cut (데이터 타입을 string으로 바로 변환하여 fillna 에러 방지)
+        sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False).astype(str)
         
-        # [수정 1] observed=False로 설정하여 빈 구간도 결과에 포함시킴
-        grp = sub.groupby("기온구간", as_index=False, observed=False).agg(
+        # 3. 집계 (이제 string 컬럼이므로 observed=True/False 이슈 없음)
+        grp = sub.groupby("기온구간", as_index=False).agg(
             평균공급량_GJ=(act_col, lambda x: x.mean() / 1000.0), 
             일수=(act_col, "count")
         )
         
-        # [수정 2] 숫자형 컬럼에만 0을 채움 (Categorical 컬럼 건드리지 않음 -> TypeError 방지)
+        # 4. 빈 껍데기(labels)와 병합하여 모든 구간 확보 (Left Join)
+        full_bands = pd.DataFrame({"기온구간": labels})
+        grp = pd.merge(full_bands, grp, on="기온구간", how="left")
+        
+        # 5. [핵심] 안전하게 0으로 채우기 (이제 데이터 타입 충돌 없음)
         grp["평균공급량_GJ"] = grp["평균공급량_GJ"].fillna(0)
         grp["일수"] = grp["일수"].fillna(0)
         
-        # [수정 3] 그래프 그리기 전 문자열로 변환하여 Plotly 호환성 확보
-        grp["기온구간"] = grp["기온구간"].astype(str)
+        # 6. [핵심] 순서 재주입 (category_orders를 위해 Plotly에게 넘길 때 순서대로 넘겨줌)
+        # 하지만 merge 특성상 순서가 섞일 수 있으므로 map으로 다시 정렬
+        grp["sort_idx"] = grp["기온구간"].map({label: i for i, label in enumerate(labels)})
+        grp = grp.sort_values("sort_idx").drop(columns=["sort_idx"])
         
+        # 7. 그래프 그리기 (category_orders로 시각적 순서도 못 박음)
         fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수",
                      category_orders={"기온구간": labels}) # 순서 강제 고정
                      
-        fig.update_layout(xaxis_title="기온 구간", yaxis_title="평균 공급량 (GJ)", margin=dict(l=10, r=10, t=40, b=10))
+        fig.update_layout(
+            xaxis_title="기온 구간", 
+            yaxis_title="평균 공급량 (GJ)", 
+            margin=dict(l=10, r=10, t=40, b=10)
+        )
         fig.update_traces(texttemplate="%{text}일", textposition="outside")
         st.plotly_chart(fig, use_container_width=True)
         
