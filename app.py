@@ -40,10 +40,11 @@ def set_korean_font():
 set_korean_font()
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수 1] 실적 데이터 로드
+# [공통 함수 1] 실적 데이터 로드 (Path 적용)
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_historical_data_common():
+    # [수정] Path 객체 사용하여 경로 안정성 확보
     path = Path(__file__).parent / "공급량(계획_실적).xlsx"
     if not path.exists(): return None
     try:
@@ -83,10 +84,11 @@ def load_historical_data_common():
     except: return None
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수 2] 2026년 계획 데이터 로드
+# [공통 함수 2] 2026년 계획 데이터 로드 (Path 적용)
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_2026_plan_data_common():
+    # [수정] Path 객체 사용하여 경로 안정성 확보
     path = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
     if not path.exists(): return None
     try:
@@ -131,7 +133,7 @@ def load_2026_plan_data_common():
 
 
 # ==============================================================================
-# [탭 1] 도시가스 공급실적 관리
+# [탭 1] 도시가스 공급실적 관리 (로직 유지, 랭킹 문구 디자인 적용됨)
 # ==============================================================================
 def run_tab1_management():
     if 'tab1_df' not in st.session_state:
@@ -335,7 +337,7 @@ def run_tab1_management():
 
 
 # ==============================================================================
-# [탭 2] 공급량 분석 (수정됨: 기온구간 완전 표시 보장 및 정렬)
+# [탭 2] 공급량 분석 (수정됨: 파일 로딩 안정성 강화 및 그래프/정렬 로직 보완)
 # ==============================================================================
 def run_tab2_analysis():
     def center_style(styler):
@@ -347,11 +349,13 @@ def run_tab2_analysis():
         if 2026 in years: return 2026
         return years[-1]
 
+    # [수정] 파일 로딩 함수 보강 (Path 및 openpyxl 사용)
     def load_supply_sheets(excel_bytes):
         xls = pd.ExcelFile(io.BytesIO(excel_bytes), engine="openpyxl")
         return (xls.parse("월별계획_실적") if "월별계획_실적" in xls.sheet_names else pd.DataFrame(),
                 xls.parse("일별실적") if "일별실적" in xls.sheet_names else pd.DataFrame())
     
+    # [수정] 2026 계획 로딩 (Path 사용)
     def load_2026_plan_file():
         try:
             path = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
@@ -380,6 +384,7 @@ def run_tab2_analysis():
             return df[['날짜', 'plan_gj']].dropna()
         except: return None
 
+    # [신규] 월별 데이터 클리닝 함수 (참고 코드 기반)
     def clean_supply_month_df(df):
         if df.empty: return df
         df = df.copy()
@@ -393,6 +398,7 @@ def run_tab2_analysis():
         df["월"] = df["월"].astype(int)
         return df
 
+    # [신규] 일별 데이터 클리닝 함수 (참고 코드 기반)
     def clean_supply_day_df(df):
         if df.empty: return df
         df = df.copy()
@@ -420,7 +426,6 @@ def run_tab2_analysis():
         date_str = f"{int(row['연'])}년 {int(row['월'])}월 {int(row['일'])}일"
         supply_str = f"{row['공급량_GJ']:,.1f} GJ"
         
-        # m3 단위 추가 (천m3)
         col_m3 = "공급량(M3)" if "공급량(M3)" in row.index else "공급량(m3)"
         m3_val = row.get(col_m3, 0)
         m3_str = f"{m3_val/1000:,.1f} 천m³"
@@ -498,21 +503,16 @@ def run_tab2_analysis():
         
         sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False)
         
-        # [수정] 기온구간 집계
         grp = sub.groupby("기온구간", as_index=False, observed=True).agg(
             평균공급량_GJ=(act_col, lambda x: x.mean() / 1000.0), 
             일수=(act_col, "count")
         )
         
-        # [수정] 모든 기온 구간을 강제로 포함시키기 위해 빈 DataFrame과 병합
         full_bands = pd.DataFrame({"기온구간": labels})
         grp = pd.merge(full_bands, grp, on="기온구간", how="left").fillna(0)
-        
-        # [수정] 정렬 순서 강제 (Categorical 활용)
         grp["기온구간"] = pd.Categorical(grp["기온구간"], categories=labels, ordered=True)
         grp = grp.sort_values("기온구간")
         
-        # [수정] 그래프 그리기 (category_orders 명시)
         fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수",
                      category_orders={"기온구간": labels})
                      
@@ -520,7 +520,6 @@ def run_tab2_analysis():
         fig.update_traces(texttemplate="%{text}일", textposition="outside")
         st.plotly_chart(fig, use_container_width=True)
         
-        # 표 출력
         display_tbl = grp.rename(columns={"평균공급량_GJ": "평균공급량(GJ)"})
         st.dataframe(center_style(display_tbl.style.format({"평균공급량(GJ)": "{:,.1f}"})), use_container_width=True, hide_index=True)
 
@@ -672,6 +671,7 @@ def run_tab2_analysis():
     DEFAULT_SUPPLY_XLSX = "공급량(계획_실적).xlsx"
     uploaded_analysis = st.sidebar.file_uploader("공급량 엑셀 업로드", type=['xlsx'], key="u2")
     
+    # [수정] 파일 로딩 로직 개선 (Path 기반 디폴트 파일 로딩)
     supply_bytes = None
     if uploaded_analysis:
         supply_bytes = uploaded_analysis.getvalue()
@@ -691,6 +691,7 @@ def run_tab2_analysis():
 
     if supply_bytes:
         month_df, day_df = load_supply_sheets(supply_bytes)
+        # [수정] 데이터 클리닝 적용
         month_df = clean_supply_month_df(month_df)
         day_df = clean_supply_day_df(day_df)
 
