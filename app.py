@@ -435,7 +435,7 @@ def run_tab2_analysis():
         </div>"""
         st.markdown(html, unsafe_allow_html=True)
 
-    # [수정: 핵심] 기온 매트릭스 숫자 정중앙 배치 & 폰트 크기 최적화
+    # [수정: 완료] 기온 매트릭스 숫자 싱크 해결 및 에러 방지
     def temperature_matrix(day_df, default_month, key_prefix):
         st.markdown("### 🌡️ 기온 매트릭스 (일별 평균기온)")
         if day_df.empty or "평균기온(℃)" not in day_df.columns: return
@@ -456,13 +456,13 @@ def run_tab2_analysis():
         avg_row.index = ["평균"]
         pivot2 = pd.concat([pivot, avg_row], axis=0)
         
-        # [수정] text_auto=True (숫자 자동 표시)
+        # [수정] text_auto 사용, textposition 등 충돌 옵션 제거
         fig = px.imshow(
             pivot2, 
             aspect="auto", 
             labels=dict(x="연도", y="일", color="°C"), 
             color_continuous_scale="RdBu_r",
-            text_auto=".1f"  # 소수점 1자리까지 숫자 표시
+            text_auto=".1f"  # 이 옵션이 자동으로 숫자를 표시해줍니다.
         )
         
         fig.update_layout(
@@ -475,11 +475,9 @@ def run_tab2_analysis():
             hovermode="closest"
         )
         
-        # [수정: 핵심] 텍스트 위치 강제 고정 (정중앙) 및 폰트 크기 조절
+        # [수정] 폰트 크기만 조절 (texttemplate, textposition 제거 -> 에러 해결)
         fig.update_traces(
-            texttemplate="%{z:.1f}", 
-            textfont={"size": 10},   # 크기 10px로 최적화
-            textposition="middle center", # <--- 수직/수평 중앙 정렬 강제
+            textfont={"size": 10}, 
             hovertemplate="<b>%{x}년 " + str(sel_m) + "월 %{y}일</b><br>🌡️ 평균기온: %{z:.1f}℃<extra></extra>"
         )
         
@@ -487,7 +485,7 @@ def run_tab2_analysis():
         
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
 
-    # [수정: 완벽 해결] 기온구간 완전 표시 및 정렬 보장 로직 (TypeError 방지)
+    # [수정: 완료] 기온구간 그래프 고정 (categoryarray + update_xaxes)
     def temperature_supply_band_section(day_df, default_month, key_prefix):
         st.markdown("### 🔥 기온 구간별 평균 공급량 분석")
         act_col = "공급량(MJ)"
@@ -510,36 +508,39 @@ def run_tab2_analysis():
         bins = [-100, -10, -5, 0, 5, 10, 15, 20, 25, 30, 100]
         labels = ["<-10℃", "-10~-5℃", "-5~0℃", "0~5℃", "5~10℃", "10~15℃", "15~20℃", "20~25℃", "25~30℃", "≥30℃"]
         
-        # 2. cut (데이터 타입을 string으로 바로 변환하여 fillna 에러 방지)
+        # 2. cut (문자열 변환)
         sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False).astype(str)
         
-        # 3. 집계 (이제 string 컬럼이므로 observed=True/False 이슈 없음)
+        # 3. 집계
         grp = sub.groupby("기온구간", as_index=False).agg(
             평균공급량_GJ=(act_col, lambda x: x.mean() / 1000.0), 
             일수=(act_col, "count")
         )
         
-        # 4. 빈 껍데기(labels)와 병합하여 모든 구간 확보 (Left Join)
+        # 4. 빈 껍데기(labels)와 병합
         full_bands = pd.DataFrame({"기온구간": labels})
         grp = pd.merge(full_bands, grp, on="기온구간", how="left")
         
-        # 5. [핵심] 안전하게 0으로 채우기 (이제 데이터 타입 충돌 없음)
+        # 5. 0 채우기
         grp["평균공급량_GJ"] = grp["평균공급량_GJ"].fillna(0)
         grp["일수"] = grp["일수"].fillna(0)
         
-        # 6. [핵심] 순서 재주입 (Categorical로 변환하여 정렬)
+        # 6. 순서 정렬
         grp["sort_idx"] = grp["기온구간"].map({label: i for i, label in enumerate(labels)})
         grp = grp.sort_values("sort_idx").drop(columns=["sort_idx"])
         
-        # 7. 그래프 그리기 (category_orders로 시각적 순서도 못 박음)
-        fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수",
-                     category_orders={"기온구간": labels}) # 순서 강제 고정
+        # 7. 그래프 그리기 (categoryarray로 축 고정)
+        fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수")
                      
         fig.update_layout(
             xaxis_title="기온 구간", 
             yaxis_title="평균 공급량 (GJ)", 
             margin=dict(l=10, r=10, t=40, b=10)
         )
+        
+        # [핵심] X축 카테고리 순서 강제 고정
+        fig.update_xaxes(type='category', categoryorder='array', categoryarray=labels)
+        
         fig.update_traces(texttemplate="%{text}일", textposition="outside")
         st.plotly_chart(fig, use_container_width=True)
         
