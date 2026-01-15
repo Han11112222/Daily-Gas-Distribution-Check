@@ -454,7 +454,15 @@ def run_tab2_analysis():
         avg_row = pivot.mean(axis=0).to_frame().T
         avg_row.index = ["평균"]
         pivot2 = pd.concat([pivot, avg_row], axis=0)
-        fig = px.imshow(pivot2, aspect="auto", labels=dict(x="연도", y="일", color="°C"), color_continuous_scale="RdBu_r")
+        
+        # [수정] text_auto=True 추가하여 히트맵 안에 숫자가 표시되도록 함
+        fig = px.imshow(
+            pivot2, 
+            aspect="auto", 
+            labels=dict(x="연도", y="일", color="°C"), 
+            color_continuous_scale="RdBu_r",
+            text_auto=".1f"  # 소수점 1자리까지 숫자 표시
+        )
         
         fig.update_layout(
             height=780, 
@@ -474,7 +482,7 @@ def run_tab2_analysis():
         
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
 
-    # [수정: 완벽 해결] 빈 껍데기(Template) 생성 및 병합으로 안정성 확보
+    # [수정: 완벽 해결] 기온구간 완전 표시 및 정렬 보장 로직 (TypeError 방지)
     def temperature_supply_band_section(day_df, default_month, key_prefix):
         st.markdown("### 🔥 기온 구간별 평균 공급량 분석")
         act_col = "공급량(MJ)"
@@ -497,7 +505,7 @@ def run_tab2_analysis():
         bins = [-100, -10, -5, 0, 5, 10, 15, 20, 25, 30, 100]
         labels = ["<-10℃", "-10~-5℃", "-5~0℃", "0~5℃", "5~10℃", "10~15℃", "15~20℃", "20~25℃", "25~30℃", "≥30℃"]
         
-        # 2. cut (데이터 타입을 string으로 바로 변환하여 fillna 에러 방지)
+        # 2. [수정: 핵심] cut 결과를 바로 string으로 변환! (Categorical 타입으로 인한 fillna 에러 원천 차단)
         sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False).astype(str)
         
         # 3. 집계 (이제 string 컬럼이므로 observed=True/False 이슈 없음)
@@ -510,12 +518,11 @@ def run_tab2_analysis():
         full_bands = pd.DataFrame({"기온구간": labels})
         grp = pd.merge(full_bands, grp, on="기온구간", how="left")
         
-        # 5. [핵심] 안전하게 0으로 채우기 (이제 데이터 타입 충돌 없음)
+        # 5. [수정: 핵심] 안전하게 0으로 채우기 (이제 데이터 타입 충돌 없음)
         grp["평균공급량_GJ"] = grp["평균공급량_GJ"].fillna(0)
         grp["일수"] = grp["일수"].fillna(0)
         
-        # 6. [핵심] 순서 재주입 (category_orders를 위해 Plotly에게 넘길 때 순서대로 넘겨줌)
-        # 하지만 merge 특성상 순서가 섞일 수 있으므로 map으로 다시 정렬
+        # 6. [수정: 핵심] 순서 재주입 (Categorical로 변환하여 정렬)
         grp["sort_idx"] = grp["기온구간"].map({label: i for i, label in enumerate(labels)})
         grp = grp.sort_values("sort_idx").drop(columns=["sort_idx"])
         
