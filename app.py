@@ -435,7 +435,7 @@ def run_tab2_analysis():
         </div>"""
         st.markdown(html, unsafe_allow_html=True)
 
-    # [수정] 기온 매트릭스에 숫자 표시 추가
+    # [수정: 핵심] 기온 매트릭스 숫자 정중앙 배치 & 폰트 크기 최적화
     def temperature_matrix(day_df, default_month, key_prefix):
         st.markdown("### 🌡️ 기온 매트릭스 (일별 평균기온)")
         if day_df.empty or "평균기온(℃)" not in day_df.columns: return
@@ -456,7 +456,7 @@ def run_tab2_analysis():
         avg_row.index = ["평균"]
         pivot2 = pd.concat([pivot, avg_row], axis=0)
         
-        # [수정] text_auto=True 추가 (숫자 표시)
+        # [수정] text_auto=True (숫자 자동 표시)
         fig = px.imshow(
             pivot2, 
             aspect="auto", 
@@ -475,10 +475,11 @@ def run_tab2_analysis():
             hovermode="closest"
         )
         
-        # [수정] 텍스트가 칸 안에 잘 들어가도록 폰트 조정
+        # [수정: 핵심] 텍스트 위치 강제 고정 (정중앙) 및 폰트 크기 조절
         fig.update_traces(
             texttemplate="%{z:.1f}", 
-            textfont={"size": 9}, 
+            textfont={"size": 10},   # 크기 10px로 최적화
+            textposition="middle center", # <--- 수직/수평 중앙 정렬 강제
             hovertemplate="<b>%{x}년 " + str(sel_m) + "월 %{y}일</b><br>🌡️ 평균기온: %{z:.1f}℃<extra></extra>"
         )
         
@@ -486,7 +487,7 @@ def run_tab2_analysis():
         
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
 
-    # [수정] 기온구간 완전 표시 및 정렬 보장 로직 (TypeError 방지 + 빈 구간 표시)
+    # [수정: 완벽 해결] 기온구간 완전 표시 및 정렬 보장 로직 (TypeError 방지)
     def temperature_supply_band_section(day_df, default_month, key_prefix):
         st.markdown("### 🔥 기온 구간별 평균 공급량 분석")
         act_col = "공급량(MJ)"
