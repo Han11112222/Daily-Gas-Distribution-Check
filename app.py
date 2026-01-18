@@ -435,7 +435,6 @@ def run_tab2_analysis():
         </div>"""
         st.markdown(html, unsafe_allow_html=True)
 
-    # [수정: 완료] 기온 매트릭스 숫자 싱크 해결 및 에러 방지
     def temperature_matrix(day_df, default_month, key_prefix):
         st.markdown("### 🌡️ 기온 매트릭스 (일별 평균기온)")
         if day_df.empty or "평균기온(℃)" not in day_df.columns: return
@@ -456,13 +455,12 @@ def run_tab2_analysis():
         avg_row.index = ["평균"]
         pivot2 = pd.concat([pivot, avg_row], axis=0)
         
-        # [수정] text_auto 사용, textposition 등 충돌 옵션 제거
         fig = px.imshow(
             pivot2, 
             aspect="auto", 
             labels=dict(x="연도", y="일", color="°C"), 
             color_continuous_scale="RdBu_r",
-            text_auto=".1f"  # 이 옵션이 자동으로 숫자를 표시해줍니다.
+            text_auto=".1f"
         )
         
         fig.update_layout(
@@ -475,7 +473,6 @@ def run_tab2_analysis():
             hovermode="closest"
         )
         
-        # [수정] 폰트 크기만 조절 (texttemplate, textposition 제거 -> 에러 해결)
         fig.update_traces(
             textfont={"size": 10}, 
             hovertemplate="<b>%{x}년 " + str(sel_m) + "월 %{y}일</b><br>🌡️ 평균기온: %{z:.1f}℃<extra></extra>"
@@ -485,7 +482,6 @@ def run_tab2_analysis():
         
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
 
-    # [수정: 완료] 기온구간 그래프 고정 (categoryarray + update_xaxes)
     def temperature_supply_band_section(day_df, default_month, key_prefix):
         st.markdown("### 🔥 기온 구간별 평균 공급량 분석")
         act_col = "공급량(MJ)"
@@ -504,43 +500,33 @@ def run_tab2_analysis():
         sub = sub.dropna(subset=["평균기온(℃)", act_col])
         if sub.empty: return
         
-        # 1. 구간 및 레이블 정의
         bins = [-100, -10, -5, 0, 5, 10, 15, 20, 25, 30, 100]
         labels = ["<-10℃", "-10~-5℃", "-5~0℃", "0~5℃", "5~10℃", "10~15℃", "15~20℃", "20~25℃", "25~30℃", "≥30℃"]
         
-        # 2. cut (문자열 변환)
         sub["기온구간"] = pd.cut(sub["평균기온(℃)"], bins=bins, labels=labels, right=False).astype(str)
         
-        # 3. 집계
         grp = sub.groupby("기온구간", as_index=False).agg(
             평균공급량_GJ=(act_col, lambda x: x.mean() / 1000.0), 
             일수=(act_col, "count")
         )
         
-        # 4. 빈 껍데기(labels)와 병합
         full_bands = pd.DataFrame({"기온구간": labels})
         grp = pd.merge(full_bands, grp, on="기온구간", how="left")
-        
-        # 5. 0 채우기
         grp["평균공급량_GJ"] = grp["평균공급량_GJ"].fillna(0)
         grp["일수"] = grp["일수"].fillna(0)
         
-        # 6. 순서 정렬
         grp["sort_idx"] = grp["기온구간"].map({label: i for i, label in enumerate(labels)})
         grp = grp.sort_values("sort_idx").drop(columns=["sort_idx"])
         
-        # 7. 그래프 그리기 (categoryarray로 축 고정)
-        fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수")
+        fig = px.bar(grp, x="기온구간", y="평균공급량_GJ", text="일수",
+                     category_orders={"기온구간": labels}) 
                      
         fig.update_layout(
             xaxis_title="기온 구간", 
             yaxis_title="평균 공급량 (GJ)", 
             margin=dict(l=10, r=10, t=40, b=10)
         )
-        
-        # [핵심] X축 카테고리 순서 강제 고정
         fig.update_xaxes(type='category', categoryorder='array', categoryarray=labels)
-        
         fig.update_traces(texttemplate="%{text}일", textposition="outside")
         st.plotly_chart(fig, use_container_width=True)
         
@@ -598,6 +584,7 @@ def run_tab2_analysis():
             fig1.add_scatter(x=this_df["일"], y=this_df[act_col] / 1000.0, mode="lines+markers", name=f"{sel_year}년 {sel_month}월 실적", line=dict(color="black", width=4), hovertemplate="%{y:,.0f} GJ<extra></extra>")
         fig1.update_layout(title=f"{sel_year}년 {sel_month}월 일별 공급량 패턴", xaxis_title="일", yaxis_title="공급량 (GJ)", margin=dict(l=10, r=10, t=50, b=10))
         st.plotly_chart(fig1, use_container_width=True)
+        
         if not this_df.empty and plan_curve_x:
             st.markdown("### 🧮 일일계획 대비 편차")
             plan_sub = pd.DataFrame({'일': plan_curve_x, 'plan_gj': plan_curve_y})
@@ -605,8 +592,17 @@ def run_tab2_analysis():
             merged['편차_GJ'] = (merged[act_col] / 1000.0) - merged['plan_gj']
             fig2 = go.Figure()
             fig2.add_bar(x=merged["일"], y=merged["편차_GJ"], name="편차", marker_color="#FF4B4B", hovertemplate="%{y:,.0f} GJ<extra></extra>")
-            fig2.update_layout(title=f"계획 대비 편차 (실적-계획)", xaxis_title="일", yaxis_title="편차 (GJ)", margin=dict(l=10, r=10, t=40, b=10))
+            
+            # [수정: 핵심] X축 범위를 0.5일 ~ 31.5일로 강제 고정하여 데이터 없는 구간도 빈 공간으로 표시
+            fig2.update_layout(
+                title=f"계획 대비 편차 (실적-계획)", 
+                xaxis_title="일", 
+                yaxis_title="편차 (GJ)", 
+                margin=dict(l=10, r=10, t=40, b=10),
+                xaxis=dict(dtick=1, range=[0.5, 31.5]) # <--- 여기가 핵심! 1일~31일 고정
+            )
             st.plotly_chart(fig2, use_container_width=True)
+            
             show = merged[["일자", act_col, "편차_GJ"]].copy()
             show.columns = ["일자", "일별실적(GJ)", "편차(GJ)"]
             show["일별실적(GJ)"] = show["일별실적(GJ)"].apply(lambda v: v / 1000.0)
