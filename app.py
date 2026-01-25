@@ -40,47 +40,96 @@ def set_korean_font():
 set_korean_font()
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수 1] 실적 데이터 로드
+# [공통 함수 1] 실적 데이터 로드 (구글시트 우선 -> 엑셀 백업)
 # ─────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=600) # 10분마다 캐시 갱신 (구글시트 최신화)
 def load_historical_data_common():
-    path = Path(__file__).parent / "공급량(계획_실적).xlsx"
-    if not path.exists(): return None
+    # 1. 구글 스프레드시트 정보 설정
+    sheet_id = "13HrIz6OytYDykXeXzXJ02I6XbaKin1YaKBoO2kBd6Bs"
+    # gid=0은 보통 첫 번째 시트('일별실적')를 의미합니다.
+    sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0"
+    
+    local_path = Path(__file__).parent / "공급량(계획_실적).xlsx"
+    df = None
+    
+    # 2. 구글 시트 로드 시도
     try:
-        xls = pd.ExcelFile(path, engine="openpyxl")
-        sheet_name = "일별실적" if "일별실적" in xls.sheet_names else xls.sheet_names[0]
-        df = pd.read_excel(xls, sheet_name=sheet_name)
+        # CSV로 읽어오기
+        df_sheet = pd.read_csv(sheet_url)
+        
+        # 구글시트의 숫자 천단위 콤마(,) 제거 처리
+        for col in df_sheet.columns:
+            if df_sheet[col].dtype == 'object':
+                try:
+                    # 날짜 컬럼 등은 제외하고 숫자형태인 문자열만 변환 시도
+                    if "일자" not in col and "date" not in col.lower():
+                        df_sheet[col] = df_sheet[col].str.replace(',', '').astype(float)
+                except:
+                    pass
+        
+        df = df_sheet
+        # st.toast("☁️ 구글 스프레드시트에서 데이터를 성공적으로 가져왔습니다.") # 필요시 주석 해제
+
+    except Exception:
+        # 3. 실패 시 로컬 엑셀 파일 사용 (Fail-safe)
+        if local_path.exists():
+            try:
+                xls = pd.ExcelFile(local_path, engine="openpyxl")
+                sheet_name = "일별실적" if "일별실적" in xls.sheet_names else xls.sheet_names[0]
+                df = pd.read_excel(xls, sheet_name=sheet_name)
+                st.toast("⚠️ 구글 시트 연결 불안정. 로컬 엑셀 파일을 사용합니다.")
+            except:
+                return None
+        else:
+            return None
+
+    if df is None: return None
+
+    # 4. 데이터 전처리 (컬럼 매핑 및 단위 변환)
+    try:
+        # 컬럼명 공백 제거
         df.columns = [str(c).replace(" ", "").strip() for c in df.columns]
         
         col_date = next((c for c in df.columns if "일자" in c or "date" in c.lower()), None)
+        
+        # 열량(MJ/GJ) 컬럼 찾기
         col_mj = next((c for c in df.columns if "실적" in c and ("MJ" in c or "GJ" in c)), None)
         if not col_mj:
              col_mj = next((c for c in df.columns if "공급량" in c and ("MJ" in c or "GJ" in c)), None)
+        
+        # 부피(m3) 컬럼 찾기
         col_m3 = next((c for c in df.columns if ("실적" in c or "공급량" in c) and ("M3" in c or "m3" in c)), None)
         
         if not col_date or not col_mj: return None
         
+        # 날짜 변환
         df[col_date] = pd.to_datetime(df[col_date], errors='coerce')
         df = df.dropna(subset=[col_date])
         
+        # 열량 데이터 처리 (MJ -> GJ 변환)
         df['val_gj'] = pd.to_numeric(df[col_mj], errors='coerce').fillna(0)
         if "MJ" in col_mj.upper():
-           df['val_gj'] = df['val_gj'] / 1000.0
-           
+            df['val_gj'] = df['val_gj'] / 1000.0
+        
+        # 부피 데이터 처리
         if col_m3:
-           df['val_m3'] = pd.to_numeric(df[col_m3], errors='coerce').fillna(0)
+            df['val_m3'] = pd.to_numeric(df[col_m3], errors='coerce').fillna(0)
         else:
-           df['val_m3'] = 0
-           
+            df['val_m3'] = 0
+            
         df = df[df['val_gj'] > 0].copy()
         
+        # 기온 데이터 처리
         if "평균기온(℃)" in df.columns:
              df["평균기온(℃)"] = pd.to_numeric(df["평균기온(℃)"], errors='coerce')
         else:
              df["평균기온(℃)"] = np.nan
 
         return df[['val_gj', 'val_m3', col_date, '평균기온(℃)']].rename(columns={col_date: '일자'})
-    except: return None
+        
+    except Exception as e:
+        st.error(f"데이터 전처리 중 오류가 발생했습니다: {e}")
+        return None
 
 # ─────────────────────────────────────────────────────────
 # [공통 함수 2] 2026년 계획 데이터 로드
@@ -593,13 +642,12 @@ def run_tab2_analysis():
             fig2 = go.Figure()
             fig2.add_bar(x=merged["일"], y=merged["편차_GJ"], name="편차", marker_color="#FF4B4B", hovertemplate="%{y:,.0f} GJ<extra></extra>")
             
-            # [수정: 핵심] X축 범위를 0.5일 ~ 31.5일로 강제 고정하여 데이터 없는 구간도 빈 공간으로 표시
             fig2.update_layout(
                 title=f"계획 대비 편차 (실적-계획)", 
                 xaxis_title="일", 
                 yaxis_title="편차 (GJ)", 
                 margin=dict(l=10, r=10, t=40, b=10),
-                xaxis=dict(dtick=1, range=[0.5, 31.5]) # <--- 여기가 핵심! 1일~31일 고정
+                xaxis=dict(dtick=1, range=[0.5, 31.5]) 
             )
             st.plotly_chart(fig2, use_container_width=True)
             
@@ -691,7 +739,6 @@ def run_tab2_analysis():
     DEFAULT_SUPPLY_XLSX = "공급량(계획_실적).xlsx"
     uploaded_analysis = st.sidebar.file_uploader("공급량 엑셀 업로드", type=['xlsx'], key="u2")
     
-    # [수정] 파일 로딩 로직 개선 (Path 기반 디폴트 파일 로딩)
     supply_bytes = None
     if uploaded_analysis:
         supply_bytes = uploaded_analysis.getvalue()
@@ -711,7 +758,6 @@ def run_tab2_analysis():
 
     if supply_bytes:
         month_df, day_df = load_supply_sheets(supply_bytes)
-        # [수정] 데이터 클리닝 적용
         month_df = clean_supply_month_df(month_df)
         day_df = clean_supply_day_df(day_df)
 
