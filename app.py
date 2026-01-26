@@ -5,6 +5,7 @@ import io
 import matplotlib as mpl
 import plotly.express as px
 import plotly.graph_objects as go
+import requests
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -40,96 +41,104 @@ def set_korean_font():
 set_korean_font()
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수 1] 실적 데이터 로드 (구글시트 우선 -> 엑셀 백업)
+# [NEW] 기상청 API 호출 함수 (대구: 143)
 # ─────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False, ttl=600) # 10분마다 캐시 갱신 (구글시트 최신화)
+@st.cache_data(ttl=3600)  # 1시간마다 갱신
+def get_daegu_temperature(target_date_str):
+    """
+    공공데이터포털 기상청 종관기상관측(ASOS) API를 통해 대구(143)의 평균기온을 가져옵니다.
+    target_date_str: 'YYYYMMDD' 형식 (예: '20260126')
+    """
+    # Han형님이 제공해주신 디코딩 키
+    API_KEY = "YPnuBBk5fCP55U/+PF8HS2ifcwDclA2+WghIxuodBYRwi58ONaiMm8ATkzzaZSk1nP3dfXBFfEGboryZuZy9IQ=="
+
+    url = "http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList"
+    params = {
+        "serviceKey": API_KEY,
+        "pageNo": "1",
+        "numOfRows": "10",
+        "dataType": "JSON",
+        "dataCd": "ASOS",
+        "dateCd": "DAY",
+        "startDt": target_date_str,
+        "endDt": target_date_str,
+        "stnIds": "143"  # 143: 대구 지점 코드
+    }
+
+    try:
+        response = requests.get(url, params=params)
+        data = response.json()
+        items = data['response']['body']['items']['item']
+        if items:
+            # avgTa: 평균기온
+            avg_temp = float(items[0]['avgTa'])
+            return avg_temp
+    except Exception as e:
+        # API 오류 또는 데이터 없음(아직 발표 안됨 등) 시 None 반환
+        return None
+    return None
+
+# ─────────────────────────────────────────────────────────
+# [공통 함수 1] 실적 데이터 로드 (구글시트 -> 엑셀 -> 기온API 결합)
+# ─────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False, ttl=600)
 def load_historical_data_common():
-    # 1. 구글 스프레드시트 정보 설정
     sheet_id = "13HrIz6OytYDykXeXzXJ02I6XbaKin1YaKBoO2kBd6Bs"
-    # gid=0은 보통 첫 번째 시트('일별실적')를 의미합니다.
     sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0"
-    
     local_path = Path(__file__).parent / "공급량(계획_실적).xlsx"
     df = None
     
-    # 2. 구글 시트 로드 시도
+    # 1. 구글 시트 로드
     try:
-        # CSV로 읽어오기
         df_sheet = pd.read_csv(sheet_url)
-        
-        # 구글시트의 숫자 천단위 콤마(,) 제거 처리
         for col in df_sheet.columns:
             if df_sheet[col].dtype == 'object':
                 try:
-                    # 날짜 컬럼 등은 제외하고 숫자형태인 문자열만 변환 시도
                     if "일자" not in col and "date" not in col.lower():
                         df_sheet[col] = df_sheet[col].str.replace(',', '').astype(float)
-                except:
-                    pass
-        
+                except: pass
         df = df_sheet
-        # st.toast("☁️ 구글 스프레드시트에서 데이터를 성공적으로 가져왔습니다.") # 필요시 주석 해제
-
     except Exception:
-        # 3. 실패 시 로컬 엑셀 파일 사용 (Fail-safe)
+        # 2. 실패 시 로컬 엑셀
         if local_path.exists():
             try:
                 xls = pd.ExcelFile(local_path, engine="openpyxl")
                 sheet_name = "일별실적" if "일별실적" in xls.sheet_names else xls.sheet_names[0]
                 df = pd.read_excel(xls, sheet_name=sheet_name)
-                st.toast("⚠️ 구글 시트 연결 불안정. 로컬 엑셀 파일을 사용합니다.")
-            except:
-                return None
-        else:
-            return None
+            except: return None
+        else: return None
 
     if df is None: return None
 
-    # 4. 데이터 전처리 (컬럼 매핑 및 단위 변환)
+    # 3. 데이터 전처리
     try:
-        # 컬럼명 공백 제거
         df.columns = [str(c).replace(" ", "").strip() for c in df.columns]
-        
         col_date = next((c for c in df.columns if "일자" in c or "date" in c.lower()), None)
-        
-        # 열량(MJ/GJ) 컬럼 찾기
         col_mj = next((c for c in df.columns if "실적" in c and ("MJ" in c or "GJ" in c)), None)
-        if not col_mj:
-             col_mj = next((c for c in df.columns if "공급량" in c and ("MJ" in c or "GJ" in c)), None)
-        
-        # 부피(m3) 컬럼 찾기
+        if not col_mj: col_mj = next((c for c in df.columns if "공급량" in c and ("MJ" in c or "GJ" in c)), None)
         col_m3 = next((c for c in df.columns if ("실적" in c or "공급량" in c) and ("M3" in c or "m3" in c)), None)
         
         if not col_date or not col_mj: return None
         
-        # 날짜 변환
         df[col_date] = pd.to_datetime(df[col_date], errors='coerce')
         df = df.dropna(subset=[col_date])
         
-        # 열량 데이터 처리 (MJ -> GJ 변환)
         df['val_gj'] = pd.to_numeric(df[col_mj], errors='coerce').fillna(0)
-        if "MJ" in col_mj.upper():
-            df['val_gj'] = df['val_gj'] / 1000.0
+        if "MJ" in col_mj.upper(): df['val_gj'] = df['val_gj'] / 1000.0
         
-        # 부피 데이터 처리
-        if col_m3:
-            df['val_m3'] = pd.to_numeric(df[col_m3], errors='coerce').fillna(0)
-        else:
-            df['val_m3'] = 0
+        if col_m3: df['val_m3'] = pd.to_numeric(df[col_m3], errors='coerce').fillna(0)
+        else: df['val_m3'] = 0
             
         df = df[df['val_gj'] > 0].copy()
         
-        # 기온 데이터 처리
+        # 기온 처리
         if "평균기온(℃)" in df.columns:
              df["평균기온(℃)"] = pd.to_numeric(df["평균기온(℃)"], errors='coerce')
         else:
              df["평균기온(℃)"] = np.nan
 
         return df[['val_gj', 'val_m3', col_date, '평균기온(℃)']].rename(columns={col_date: '일자'})
-        
-    except Exception as e:
-        st.error(f"데이터 전처리 중 오류가 발생했습니다: {e}")
-        return None
+    except Exception: return None
 
 # ─────────────────────────────────────────────────────────
 # [공통 함수 2] 2026년 계획 데이터 로드
@@ -156,8 +165,8 @@ def load_2026_plan_data_common():
             if '연' in c: col_map['y'] = c
             elif '월' in c: col_map['m'] = c
             elif '일' in c: col_map['d'] = c
-            elif ('계획' in c or '예상' in c) and ('GJ' in c or 'MJ' in c): col_map['p_gj'] = c
-            elif ('계획' in c or '예상' in c) and ('m3' in c or 'M3' in c): col_map['p_m3'] = c
+            elif ('계획' in c or '예상' in c) and 'GJ' in c: col_map['p_gj'] = c
+            elif ('계획' in c or '예상' in c) and 'm3' in c: col_map['p_m3'] = c
 
         df['날짜'] = pd.to_datetime({
             'year': pd.to_numeric(df[col_map['y']], errors='coerce'),
@@ -186,11 +195,7 @@ def run_tab1_management():
     if 'tab1_df' not in st.session_state:
         df_hist = load_historical_data_common()
         if df_hist is not None and not df_hist.empty:
-            init_df = df_hist.rename(columns={
-                '일자': '날짜',
-                'val_gj': '실적(GJ)',
-                'val_m3': '실적(m3)'
-            })
+            init_df = df_hist.rename(columns={'일자': '날짜', 'val_gj': '실적(GJ)', 'val_m3': '실적(m3)'})
             init_df['계획(GJ)'] = 0.0
             init_df['계획(m3)'] = 0.0
             st.session_state.tab1_df = init_df
@@ -215,7 +220,7 @@ def run_tab1_management():
         st.session_state.tab1_df = df
 
     st.sidebar.header("📂 [관리] 데이터 파일")
-    uploaded = st.sidebar.file_uploader("연간계획 엑셀 업로드", type=['xlsx'], key="u1")
+    st.sidebar.file_uploader("연간계획 엑셀 업로드", type=['xlsx'], key="u1")
     
     st.title("🔥 도시가스 공급실적 관리")
 
@@ -228,7 +233,18 @@ def run_tab1_management():
 
     mask_day = df['날짜'] == target_date
     current_row = df[mask_day]
+
+    # [NEW] 선택된 날짜에 데이터가 없거나, 기온이 비어있으면 API 호출
+    api_temp = None
+    is_new_data = current_row.empty
     
+    # 데이터가 아예 없거나(신규), 데이터는 있는데 기온이 NaN인 경우
+    if is_new_data or (not current_row.empty and pd.isna(current_row['평균기온(℃)'].iloc[0])):
+        # 미래/오늘 데이터는 API에 없을 수 있으므로 예외처리
+        api_temp = get_daegu_temperature(target_date.strftime("%Y%m%d"))
+        if api_temp is not None:
+             st.toast(f"⛅ 기상청 API: {target_date.strftime('%Y-%m-%d')} 대구 기온({api_temp}℃) 수신 성공!")
+
     if current_row.empty:
         p_gj, p_m3 = 0, 0
         if df_plan_file is not None:
@@ -239,21 +255,26 @@ def run_tab1_management():
 
         new_row = pd.DataFrame([{
             '날짜': target_date,
-            '계획(GJ)': p_gj,
-            '실적(GJ)': 0,
-            '계획(m3)': p_m3,
-            '실적(m3)': 0,
-            '평균기온(℃)': np.nan
+            '계획(GJ)': p_gj, '실적(GJ)': 0,
+            '계획(m3)': p_m3, '실적(m3)': 0,
+            '평균기온(℃)': api_temp if api_temp is not None else np.nan
         }])
         df = pd.concat([df, new_row], ignore_index=True)
         st.session_state.tab1_df = df
         current_row = df[df['날짜'] == target_date]
+    else:
+        # 이미 데이터 행이 있지만 기온이 비어서 API로 가져온 경우 -> 업데이트
+        if api_temp is not None:
+            df.loc[mask_day, '평균기온(℃)'] = api_temp
+            st.session_state.tab1_df = df
+            current_row = df[df['날짜'] == target_date]
 
     current_val_gj = float(current_row['실적(GJ)'].iloc[0])
     plan_val_gj = float(current_row['계획(GJ)'].iloc[0])
     current_val_m3 = float(current_row['실적(m3)'].iloc[0])
     plan_val_m3 = float(current_row['계획(m3)'].iloc[0])
 
+    # 랭킹 로직
     rank_text = ""
     is_top_rank = False
     if current_val_gj > 0:
@@ -266,9 +287,7 @@ def run_tab1_management():
             month_vals = pd.concat([hist_month['val_gj'], pd.Series([current_val_gj])])
             rank_month = (month_vals > current_val_gj).sum() + 1
             firecracker = "🎉" if rank_all == 1 else ""
-            
             rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
-            
             if rank_all == 1: is_top_rank = True
 
     st.markdown("### 🔥 열량 실적 (GJ)")
@@ -280,13 +299,7 @@ def run_tab1_management():
         st.metric(label=f"일간 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
         st.caption(f"계획: {int(plan_val_gj):,} GJ")
         if rank_text:
-            st.markdown(
-                f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span>"
-                f"<br>"
-                f"<span style='font-size: 150%; color: black;'>(2014년 1월 1일 이후 랭킹)</span>", 
-                unsafe_allow_html=True
-            )
-            
+            st.markdown(f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span><br><span style='font-size: 150%; color: black;'>(2014년 1월 1일 이후 랭킹)</span>", unsafe_allow_html=True)
             if is_top_rank:
                 st.balloons()
                 st.toast("🎉 축하합니다! 역대 최고 공급량(1위)을 달성했습니다! 🎆")
@@ -294,8 +307,7 @@ def run_tab1_management():
     with col_g2:
         mask_mtd = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month) & (df['날짜'] <= target_date)
         mtd_data = df[mask_mtd]
-        a_mtd = mtd_data['실적(GJ)'].sum()
-        p_mtd = mtd_data['계획(GJ)'].sum()
+        a_mtd, p_mtd = mtd_data['실적(GJ)'].sum(), mtd_data['계획(GJ)'].sum()
         rate_mtd = (a_mtd/p_mtd*100) if p_mtd > 0 else 0
         st.metric(label=f"월간 누적 달성률 {rate_mtd:.1f}%", value=f"{int(a_mtd):,} GJ", delta=f"{int(a_mtd-p_mtd):+,} GJ")
         st.caption(f"누적 계획: {int(p_mtd):,} GJ")
@@ -303,8 +315,7 @@ def run_tab1_management():
     with col_g3:
         mask_ytd = (df['날짜'].dt.year == target_date.year) & (df['날짜'] <= target_date)
         ytd_data = df[mask_ytd]
-        a_ytd = ytd_data['실적(GJ)'].sum()
-        p_ytd = ytd_data['계획(GJ)'].sum()
+        a_ytd, p_ytd = ytd_data['실적(GJ)'].sum(), ytd_data['계획(GJ)'].sum()
         rate_ytd = (a_ytd/p_ytd*100) if p_ytd > 0 else 0
         st.metric(label=f"연간 누적 달성률 {rate_ytd:.1f}%", value=f"{int(a_ytd):,} GJ", delta=f"{int(a_ytd-p_ytd):+,} GJ")
         st.caption(f"누적 계획: {int(p_ytd):,} GJ")
@@ -335,6 +346,7 @@ def run_tab1_management():
     view_df = df.loc[mask_month_view].copy()
     
     st.markdown("##### 1️⃣ 열량(GJ) 및 기온 입력")
+    # [설명] API로 가져온 값이 있으면 '평균기온' 칸에 자동으로 채워져서 보입니다.
     edited_gj = st.data_editor(
         view_df[['날짜', '계획(GJ)', '실적(GJ)', '평균기온(℃)']],
         column_config={
@@ -352,7 +364,6 @@ def run_tab1_management():
         st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
-    
     st.markdown("##### 2️⃣ 부피(천 m³) 입력")
     view_m3 = view_df[['날짜', '계획(m3)', '실적(m3)']].copy()
     view_m3['계획(천m3)'] = view_m3['계획(m3)'].apply(lambda x: int(x/1000) if x > 10000 else int(x))
@@ -381,7 +392,6 @@ def run_tab1_management():
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df.to_excel(writer, sheet_name='연간', index=False)
     st.download_button("💾 관리 데이터 엑셀 저장", buffer, f"실적데이터_{target_date.strftime('%Y%m%d')}.xlsx")
-
 
 # ==============================================================================
 # [탭 2] 공급량 분석
