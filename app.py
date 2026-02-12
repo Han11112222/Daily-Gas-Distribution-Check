@@ -321,30 +321,15 @@ def run_tab1_management():
         st.caption(f"누적 계획: {int(p_ytd):,} GJ")
 
     st.markdown("---")
-    st.markdown("### 💧 부피 실적 (천 m³)")
-    col_m1, col_m2, col_m3 = st.columns(3)
-    d_m3 = current_val_m3 / 1000 if current_val_m3 > 10000 else current_val_m3
-    p_m3 = plan_val_m3 / 1000 if plan_val_m3 > 10000 else plan_val_m3
-    
-    with col_m1:
-        st.metric(label="일간 실적", value=f"{int(d_m3):,} (천 m³)", delta=f"{int(d_m3 - p_m3):+,}")
-        st.caption(f"계획: {int(p_m3):,}")
-    with col_m2:
-        a_mtd_m3 = mtd_data['실적(m3)'].sum()
-        d_mtd_m3 = a_mtd_m3 / 1000 if a_mtd_m3 > 10000 else a_mtd_m3
-        st.metric(label="월간 누적", value=f"{int(d_mtd_m3):,} (천 m³)")
-    with col_m3:
-        a_ytd_m3 = ytd_data['실적(m3)'].sum()
-        d_ytd_m3 = a_ytd_m3 / 1000 if a_ytd_m3 > 10000 else a_ytd_m3
-        st.metric(label="연간 누적", value=f"{int(d_ytd_m3):,} (천 m³)")
-
-    st.markdown("---")
     st.subheader(f"📝 {target_date.month}월 실적 입력")
     st.info("💡 값을 수정하고 엔터(Enter)를 치면 상단 그래프와 랭킹이 즉시 업데이트됩니다.")
 
     mask_month_view = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
     view_df = df.loc[mask_month_view].copy()
     
+    # -------------------------------------------------------------------------
+    # 1️⃣ 열량(GJ) 입력 및 누계 테이블
+    # -------------------------------------------------------------------------
     st.markdown("##### 1️⃣ 열량(GJ) 및 기온 입력")
     # [설명] API로 가져온 값이 있으면 '평균기온' 칸에 자동으로 채워져서 보입니다.
     edited_gj = st.data_editor(
@@ -363,7 +348,36 @@ def run_tab1_management():
         st.session_state.tab1_df = df
         st.rerun()
 
+    # [수정된 부분: 하단 누계 테이블 추가]
+    # 편집된 데이터(edited_gj)를 기반으로 합계 계산
+    sum_plan_gj = edited_gj['계획(GJ)'].sum()
+    sum_act_gj = edited_gj['실적(GJ)'].sum()
+    diff_gj_sum = sum_act_gj - sum_plan_gj
+    rate_gj_sum = (sum_act_gj / sum_plan_gj * 100) if sum_plan_gj > 0 else 0
+    avg_temp_val = edited_gj['평균기온(℃)'].mean()
+
+    summary_gj_df = pd.DataFrame([{
+        "구분": f"{target_date.month}월 누계",
+        "계획 합계(GJ)": sum_plan_gj,
+        "실적 합계(GJ)": sum_act_gj,
+        "차이(GJ)": diff_gj_sum,
+        "달성률(%)": f"{rate_gj_sum:.1f}%",
+        "평균기온(℃)": f"{avg_temp_val:.1f}"
+    }])
+    st.dataframe(
+        summary_gj_df.style.format({
+            "계획 합계(GJ)": "{:,.0f}",
+            "실적 합계(GJ)": "{:,.0f}",
+            "차이(GJ)": "{:+,.0f}"
+        }).applymap(lambda x: 'background-color: #e6f3ff; font-weight: bold'),
+        hide_index=True, use_container_width=True
+    )
+
     st.markdown("<br>", unsafe_allow_html=True)
+    
+    # -------------------------------------------------------------------------
+    # 2️⃣ 부피(천 m³) 입력 및 누계 테이블
+    # -------------------------------------------------------------------------
     st.markdown("##### 2️⃣ 부피(천 m³) 입력")
     view_m3 = view_df[['날짜', '계획(m3)', '실적(m3)']].copy()
     view_m3['계획(천m3)'] = view_m3['계획(m3)'].apply(lambda x: int(x/1000) if x > 10000 else int(x))
@@ -386,6 +400,28 @@ def run_tab1_management():
         df.loc[mask_month_view, '실적(m3)'] = new_act_m3.values
         st.session_state.tab1_df = df
         st.rerun()
+
+    # [수정된 부분: 하단 누계 테이블 추가]
+    sum_plan_m3 = edited_m3['계획(천m3)'].sum()
+    sum_act_m3 = edited_m3['실적(천m3)'].sum()
+    diff_m3_sum = sum_act_m3 - sum_plan_m3
+    rate_m3_sum = (sum_act_m3 / sum_plan_m3 * 100) if sum_plan_m3 > 0 else 0
+    
+    summary_m3_df = pd.DataFrame([{
+        "구분": f"{target_date.month}월 누계",
+        "계획 합계(천m³)": sum_plan_m3,
+        "실적 합계(천m³)": sum_act_m3,
+        "차이(천m³)": diff_m3_sum,
+        "달성률(%)": f"{rate_m3_sum:.1f}%"
+    }])
+    st.dataframe(
+        summary_m3_df.style.format({
+            "계획 합계(천m³)": "{:,.0f}",
+            "실적 합계(천m³)": "{:,.0f}",
+            "차이(천m³)": "{:+,.0f}"
+        }).applymap(lambda x: 'background-color: #e6f3ff; font-weight: bold'),
+        hide_index=True, use_container_width=True
+    )
 
     st.markdown("---")
     buffer = io.BytesIO()
@@ -661,40 +697,30 @@ def run_tab2_analysis():
             )
             st.plotly_chart(fig2, use_container_width=True)
             
-            # ─────────────────────────────────────────────────────────
-            # [수정된 부분 START] 표 데이터 가공 및 누계 추가
-            # ─────────────────────────────────────────────────────────
             show = merged[["일자", "plan_gj", act_col, "편차_GJ"]].copy()
             show.columns = ["일자", "계획량(GJ)", "일별실적(GJ)", "편차(GJ)"]
             
-            # 단위 변환
             show["일별실적(GJ)"] = show["일별실적(GJ)"] / 1000.0
             
-            # 날짜를 문자열로 변환 (합계 행 추가용)
             show["일자"] = show["일자"].dt.strftime("%Y-%m-%d")
 
-            # 월 누계 계산
             sum_plan = show["계획량(GJ)"].sum()
             sum_act = show["일별실적(GJ)"].sum()
             sum_diff = show["편차(GJ)"].sum()
             
-            # 합계 행 추가
             summary_row = {
                 "일자": "월 누계 (Total)",
                 "계획량(GJ)": sum_plan,
                 "일별실적(GJ)": sum_act,
                 "편차(GJ)": sum_diff
             }
-            # 데이터프레임 하단에 추가
             show = pd.concat([show, pd.DataFrame([summary_row])], ignore_index=True)
 
-            # 달성률(%) 계산 (실적/계획 * 100)
             show["달성률(%)"] = show.apply(
                 lambda x: (x["일별실적(GJ)"] / x["계획량(GJ)"] * 100) if x["계획량(GJ)"] > 0 else 0, 
                 axis=1
             )
             
-            # 표 출력 (스타일 적용)
             st.dataframe(
                 center_style(
                     show.style.format({
@@ -703,15 +729,11 @@ def run_tab2_analysis():
                         "편차(GJ)": "{:,.1f}",
                         "달성률(%)": "{:,.1f}%"
                     })
-                    # 마지막 행(누계) 배경색 강조
                     .apply(lambda x: ['background-color: #f0f2f6; font-weight: bold' if x.name == len(show)-1 else '' for i in x], axis=1)
                 ), 
                 use_container_width=True, 
                 hide_index=True
             )
-            # ─────────────────────────────────────────────────────────
-            # [수정된 부분 END]
-            # ─────────────────────────────────────────────────────────
         
         st.markdown("---")
         st.markdown("### 💎 일별 공급량 Top 랭킹")
