@@ -328,28 +328,35 @@ def run_tab1_management():
     view_df = df.loc[mask_month_view].copy()
     
     # -------------------------------------------------------------------------
-    # 1️⃣ 열량(GJ) 입력 및 누계 테이블
+    # 1️⃣ 열량(GJ) 입력 및 누계 테이블 (★수정된 부분★)
     # -------------------------------------------------------------------------
     st.markdown("##### 1️⃣ 열량(GJ) 및 기온 입력")
-    # [설명] API로 가져온 값이 있으면 '평균기온' 칸에 자동으로 채워져서 보입니다.
+    
+    # 달성률(%) 계산 추가
+    view_df['달성률(%)'] = np.where(view_df['계획(GJ)'] > 0, (view_df['실적(GJ)'] / view_df['계획(GJ)'] * 100), 0.0)
+
+    # API로 가져온 값이 있으면 '평균기온' 칸에 자동으로 채워져서 보입니다.
+    # 컬럼 순서 재배치: 날짜(공급일자) - 평균기온 - 계획 - 실적 - 달성률
     edited_gj = st.data_editor(
-        view_df[['날짜', '계획(GJ)', '실적(GJ)', '평균기온(℃)']],
+        view_df[['날짜', '평균기온(℃)', '계획(GJ)', '실적(GJ)', '달성률(%)']],
         column_config={
             "날짜": st.column_config.DateColumn("공급일자", format="YYYY-MM-DD", disabled=True),
+            "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", format="%.1f", step=0.1),
             "계획(GJ)": st.column_config.NumberColumn("계획(GJ)", format="%d", disabled=True),
             "실적(GJ)": st.column_config.NumberColumn("실적(GJ) ✏️", format="%d", min_value=0),
-            "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", format="%.1f", step=0.1),
+            "달성률(%)": st.column_config.NumberColumn("달성률(%)", format="%.1f%%", disabled=True),
         },
         hide_index=True, use_container_width=True, key="editor_gj"
     )
 
-    if not edited_gj.equals(view_df[['날짜', '계획(GJ)', '실적(GJ)', '평균기온(℃)']]):
-        df.update(edited_gj)
+    # 업데이트 비교군에서 달성률을 제외한 기존 핵심 컬럼만 체크하여 안전하게 업데이트
+    check_cols = ['날짜', '계획(GJ)', '실적(GJ)', '평균기온(℃)']
+    if not edited_gj[check_cols].equals(view_df[check_cols]):
+        df.update(edited_gj[check_cols])
         st.session_state.tab1_df = df
         st.rerun()
 
-    # [수정된 부분: 하단 누계 테이블 추가]
-    # 편집된 데이터(edited_gj)를 기반으로 합계 계산
+    # 하단 누계 테이블 (기존 동일)
     sum_plan_gj = edited_gj['계획(GJ)'].sum()
     sum_act_gj = edited_gj['실적(GJ)'].sum()
     diff_gj_sum = sum_act_gj - sum_plan_gj
@@ -401,7 +408,7 @@ def run_tab1_management():
         st.session_state.tab1_df = df
         st.rerun()
 
-    # [수정된 부분: 하단 누계 테이블 추가]
+    # 하단 누계 테이블
     sum_plan_m3 = edited_m3['계획(천m3)'].sum()
     sum_act_m3 = edited_m3['실적(천m3)'].sum()
     diff_m3_sum = sum_act_m3 - sum_plan_m3
@@ -686,7 +693,7 @@ def run_tab2_analysis():
             merged = pd.merge(this_df, plan_sub, on='일', how='left')
             merged['편차_GJ'] = (merged[act_col] / 1000.0) - merged['plan_gj']
             fig2 = go.Figure()
-            fig2.add_bar(x=merged["일"], y=merged["편차_GJ"], name="편차", marker_color="#FF4B4B", hovertemplate="%{y:,.0f} GJ<extra></extra>")
+            fig2.add_bar(x=merged["일"], y=merged['편차_GJ'], name="편차", marker_color="#FF4B4B", hovertemplate="%{y:,.0f} GJ<extra></extra>")
             
             fig2.update_layout(
                 title=f"계획 대비 편차 (실적-계획)", 
