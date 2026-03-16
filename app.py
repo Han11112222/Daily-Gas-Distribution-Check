@@ -49,7 +49,6 @@ def get_daegu_temperature(target_date_str):
     공공데이터포털 기상청 종관기상관측(ASOS) API를 통해 대구(143)의 평균기온을 가져옵니다.
     target_date_str: 'YYYYMMDD' 형식 (예: '20260126')
     """
-    # Han형님이 제공해주신 디코딩 키
     API_KEY = "YPnuBBk5fCP55U/+PF8HS2ifcwDclA2+WghIxuodBYRwi58ONaiMm8ATkzzaZSk1nP3dfXBFfEGboryZuZy9IQ=="
 
     url = "http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList"
@@ -70,11 +69,9 @@ def get_daegu_temperature(target_date_str):
         data = response.json()
         items = data['response']['body']['items']['item']
         if items:
-            # avgTa: 평균기온
             avg_temp = float(items[0]['avgTa'])
             return avg_temp
     except Exception as e:
-        # API 오류 또는 데이터 없음(아직 발표 안됨 등) 시 None 반환
         return None
     return None
 
@@ -88,7 +85,6 @@ def load_historical_data_common():
     local_path = Path(__file__).parent / "공급량(계획_실적).xlsx"
     df = None
     
-    # 1. 구글 시트 로드
     try:
         df_sheet = pd.read_csv(sheet_url)
         for col in df_sheet.columns:
@@ -99,7 +95,6 @@ def load_historical_data_common():
                 except: pass
         df = df_sheet
     except Exception:
-        # 2. 실패 시 로컬 엑셀
         if local_path.exists():
             try:
                 xls = pd.ExcelFile(local_path, engine="openpyxl")
@@ -110,7 +105,6 @@ def load_historical_data_common():
 
     if df is None: return None
 
-    # 3. 데이터 전처리
     try:
         df.columns = [str(c).replace(" ", "").strip() for c in df.columns]
         col_date = next((c for c in df.columns if "일자" in c or "date" in c.lower()), None)
@@ -131,7 +125,6 @@ def load_historical_data_common():
             
         df = df[df['val_gj'] > 0].copy()
         
-        # 기온 처리
         if "평균기온(℃)" in df.columns:
              df["평균기온(℃)"] = pd.to_numeric(df["평균기온(℃)"], errors='coerce')
         else:
@@ -234,13 +227,10 @@ def run_tab1_management():
     mask_day = df['날짜'] == target_date
     current_row = df[mask_day]
 
-    # [NEW] 선택된 날짜에 데이터가 없거나, 기온이 비어있으면 API 호출
     api_temp = None
     is_new_data = current_row.empty
     
-    # 데이터가 아예 없거나(신규), 데이터는 있는데 기온이 NaN인 경우
     if is_new_data or (not current_row.empty and pd.isna(current_row['평균기온(℃)'].iloc[0])):
-        # 미래/오늘 데이터는 API에 없을 수 있으므로 예외처리
         api_temp = get_daegu_temperature(target_date.strftime("%Y%m%d"))
         if api_temp is not None:
              st.toast(f"⛅ 기상청 API: {target_date.strftime('%Y-%m-%d')} 대구 기온({api_temp}℃) 수신 성공!")
@@ -263,7 +253,6 @@ def run_tab1_management():
         st.session_state.tab1_df = df
         current_row = df[df['날짜'] == target_date]
     else:
-        # 이미 데이터 행이 있지만 기온이 비어서 API로 가져온 경우 -> 업데이트
         if api_temp is not None:
             df.loc[mask_day, '평균기온(℃)'] = api_temp
             st.session_state.tab1_df = df
@@ -274,7 +263,6 @@ def run_tab1_management():
     current_val_m3 = float(current_row['실적(m3)'].iloc[0])
     plan_val_m3 = float(current_row['계획(m3)'].iloc[0])
 
-    # 랭킹 로직
     rank_text = ""
     is_top_rank = False
     if current_val_gj > 0:
@@ -328,19 +316,36 @@ def run_tab1_management():
     view_df = df.loc[mask_month_view].copy()
     
     # -------------------------------------------------------------------------
-    # 1️⃣ 열량(GJ) 입력 및 누계 테이블 (★수정된 부분★)
+    # 1️⃣ 열량(GJ) 입력 (소계 포함)
     # -------------------------------------------------------------------------
     st.markdown("##### 1️⃣ 열량(GJ) 및 기온 입력")
     
-    # 달성률(%) 계산 추가
-    view_df['달성률(%)'] = np.where(view_df['계획(GJ)'] > 0, (view_df['실적(GJ)'] / view_df['계획(GJ)'] * 100), 0.0)
-
-    # API로 가져온 값이 있으면 '평균기온' 칸에 자동으로 채워져서 보입니다.
-    # 컬럼 순서 재배치: 날짜(공급일자) - 평균기온 - 계획 - 실적 - 달성률
+    view_df_gj = view_df[['날짜', '평균기온(℃)', '계획(GJ)', '실적(GJ)']].copy()
+    view_df_gj['달성률(%)'] = np.where(view_df_gj['계획(GJ)'] > 0, (view_df_gj['실적(GJ)'] / view_df_gj['계획(GJ)'] * 100), 0.0)
+    
+    view_df_gj['날짜'] = view_df_gj['날짜'].dt.strftime("%Y-%m-%d")
+    
+    # 누계 계산
+    sum_plan_gj = view_df_gj['계획(GJ)'].sum()
+    sum_act_gj = view_df_gj['실적(GJ)'].sum()
+    rate_gj_sum = (sum_act_gj / sum_plan_gj * 100) if sum_plan_gj > 0 else 0.0
+    avg_temp_gj = view_df_gj['평균기온(℃)'].mean()
+    
+    # 소계 행 생성
+    subtotal_gj = pd.DataFrame([{
+        '날짜': '소계',
+        '평균기온(℃)': avg_temp_gj,
+        '계획(GJ)': sum_plan_gj,
+        '실적(GJ)': sum_act_gj,
+        '달성률(%)': rate_gj_sum
+    }])
+    
+    disp_gj = pd.concat([view_df_gj, subtotal_gj], ignore_index=True)
+    
     edited_gj = st.data_editor(
-        view_df[['날짜', '평균기온(℃)', '계획(GJ)', '실적(GJ)', '달성률(%)']],
+        disp_gj,
         column_config={
-            "날짜": st.column_config.DateColumn("공급일자", format="YYYY-MM-DD", disabled=True),
+            "날짜": st.column_config.TextColumn("공급일자", disabled=True),
             "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", format="%.1f", step=0.1),
             "계획(GJ)": st.column_config.NumberColumn("계획(GJ)", format="%d", disabled=True),
             "실적(GJ)": st.column_config.NumberColumn("실적(GJ) ✏️", format="%d", min_value=0),
@@ -349,86 +354,71 @@ def run_tab1_management():
         hide_index=True, use_container_width=True, key="editor_gj"
     )
 
-    # 업데이트 비교군에서 달성률을 제외한 기존 핵심 컬럼만 체크하여 안전하게 업데이트
-    check_cols = ['날짜', '계획(GJ)', '실적(GJ)', '평균기온(℃)']
-    if not edited_gj[check_cols].equals(view_df[check_cols]):
-        df.update(edited_gj[check_cols])
+    # 소계 행 제외하고 원본 업데이트 비교
+    edited_gj_data = edited_gj[edited_gj['날짜'] != '소계'].copy()
+    
+    check_cols = ['계획(GJ)', '실적(GJ)', '평균기온(℃)']
+    if not edited_gj_data[check_cols].reset_index(drop=True).equals(view_df[check_cols].reset_index(drop=True)):
+        df.loc[mask_month_view, '실적(GJ)'] = edited_gj_data['실적(GJ)'].values
+        df.loc[mask_month_view, '평균기온(℃)'] = edited_gj_data['평균기온(℃)'].values
         st.session_state.tab1_df = df
         st.rerun()
-
-    # 하단 누계 테이블 (기존 동일)
-    sum_plan_gj = edited_gj['계획(GJ)'].sum()
-    sum_act_gj = edited_gj['실적(GJ)'].sum()
-    diff_gj_sum = sum_act_gj - sum_plan_gj
-    rate_gj_sum = (sum_act_gj / sum_plan_gj * 100) if sum_plan_gj > 0 else 0
-    avg_temp_val = edited_gj['평균기온(℃)'].mean()
-
-    summary_gj_df = pd.DataFrame([{
-        "구분": f"{target_date.month}월 누계",
-        "계획 합계(GJ)": sum_plan_gj,
-        "실적 합계(GJ)": sum_act_gj,
-        "차이(GJ)": diff_gj_sum,
-        "달성률(%)": f"{rate_gj_sum:.1f}%",
-        "평균기온(℃)": f"{avg_temp_val:.1f}"
-    }])
-    st.dataframe(
-        summary_gj_df.style.format({
-            "계획 합계(GJ)": "{:,.0f}",
-            "실적 합계(GJ)": "{:,.0f}",
-            "차이(GJ)": "{:+,.0f}"
-        }).applymap(lambda x: 'background-color: #e6f3ff; font-weight: bold'),
-        hide_index=True, use_container_width=True
-    )
 
     st.markdown("<br>", unsafe_allow_html=True)
     
     # -------------------------------------------------------------------------
-    # 2️⃣ 부피(천 m³) 입력 및 누계 테이블
+    # 2️⃣ 부피(천 m³) 입력 (소계 포함)
     # -------------------------------------------------------------------------
-    st.markdown("##### 2️⃣ 부피(천 m³) 입력")
-    view_m3 = view_df[['날짜', '계획(m3)', '실적(m3)']].copy()
+    st.markdown("##### 2️⃣ 부피(천 m³) 및 기온 입력")
+    view_m3 = view_df[['날짜', '평균기온(℃)', '계획(m3)', '실적(m3)']].copy()
     view_m3['계획(천m3)'] = view_m3['계획(m3)'].apply(lambda x: int(x/1000) if x > 10000 else int(x))
     view_m3['실적(천m3)'] = view_m3['실적(m3)'].apply(lambda x: int(x/1000) if x > 10000 else int(x))
+    view_m3['달성률(%)'] = np.where(view_m3['계획(천m3)'] > 0, (view_m3['실적(천m3)'] / view_m3['계획(천m3)'] * 100), 0.0)
+
+    view_m3_disp = view_m3[['날짜', '평균기온(℃)', '계획(천m3)', '실적(천m3)', '달성률(%)']].copy()
+    view_m3_disp['날짜'] = view_m3_disp['날짜'].dt.strftime("%Y-%m-%d")
+
+    # 누계 계산
+    sum_plan_m3 = view_m3_disp['계획(천m3)'].sum()
+    sum_act_m3 = view_m3_disp['실적(천m3)'].sum()
+    rate_m3_sum = (sum_act_m3 / sum_plan_m3 * 100) if sum_plan_m3 > 0 else 0.0
+    avg_temp_m3 = view_m3_disp['평균기온(℃)'].mean()
+
+    # 소계 행 생성
+    subtotal_m3 = pd.DataFrame([{
+        '날짜': '소계',
+        '평균기온(℃)': avg_temp_m3,
+        '계획(천m3)': sum_plan_m3,
+        '실적(천m3)': sum_act_m3,
+        '달성률(%)': rate_m3_sum
+    }])
     
+    disp_m3 = pd.concat([view_m3_disp, subtotal_m3], ignore_index=True)
+
     edited_m3 = st.data_editor(
-        view_m3[['날짜', '계획(천m3)', '실적(천m3)']],
+        disp_m3,
         column_config={
-            "날짜": st.column_config.DateColumn("공급일자", format="YYYY-MM-DD", disabled=True),
+            "날짜": st.column_config.TextColumn("공급일자", disabled=True),
+            "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", format="%.1f", step=0.1),
             "계획(천m3)": st.column_config.NumberColumn("계획(천m³)", format="%d", disabled=True),
             "실적(천m3)": st.column_config.NumberColumn("실적(천m³) ✏️", format="%d", min_value=0),
+            "달성률(%)": st.column_config.NumberColumn("달성률(%)", format="%.1f%%", disabled=True),
         },
         hide_index=True, use_container_width=True, key="editor_m3"
     )
 
-    if not edited_m3.equals(view_m3[['날짜', '계획(천m3)', '실적(천m3)']]):
-        new_plan_m3 = edited_m3['계획(천m3)'] * 1000
-        new_act_m3 = edited_m3['실적(천m3)'] * 1000
+    # 소계 행 제외하고 원본 업데이트 비교
+    edited_m3_data = edited_m3[edited_m3['날짜'] != '소계'].copy()
+
+    check_cols_m3 = ['계획(천m3)', '실적(천m3)', '평균기온(℃)']
+    if not edited_m3_data[check_cols_m3].reset_index(drop=True).equals(view_m3[check_cols_m3].reset_index(drop=True)):
+        new_plan_m3 = edited_m3_data['계획(천m3)'] * 1000
+        new_act_m3 = edited_m3_data['실적(천m3)'] * 1000
         df.loc[mask_month_view, '계획(m3)'] = new_plan_m3.values
         df.loc[mask_month_view, '실적(m3)'] = new_act_m3.values
+        df.loc[mask_month_view, '평균기온(℃)'] = edited_m3_data['평균기온(℃)'].values
         st.session_state.tab1_df = df
         st.rerun()
-
-    # 하단 누계 테이블
-    sum_plan_m3 = edited_m3['계획(천m3)'].sum()
-    sum_act_m3 = edited_m3['실적(천m3)'].sum()
-    diff_m3_sum = sum_act_m3 - sum_plan_m3
-    rate_m3_sum = (sum_act_m3 / sum_plan_m3 * 100) if sum_plan_m3 > 0 else 0
-    
-    summary_m3_df = pd.DataFrame([{
-        "구분": f"{target_date.month}월 누계",
-        "계획 합계(천m³)": sum_plan_m3,
-        "실적 합계(천m³)": sum_act_m3,
-        "차이(천m³)": diff_m3_sum,
-        "달성률(%)": f"{rate_m3_sum:.1f}%"
-    }])
-    st.dataframe(
-        summary_m3_df.style.format({
-            "계획 합계(천m³)": "{:,.0f}",
-            "실적 합계(천m³)": "{:,.0f}",
-            "차이(천m³)": "{:+,.0f}"
-        }).applymap(lambda x: 'background-color: #e6f3ff; font-weight: bold'),
-        hide_index=True, use_container_width=True
-    )
 
     st.markdown("---")
     buffer = io.BytesIO()
@@ -853,7 +843,7 @@ def run_tab2_analysis():
             act_col = "실적_공급량(MJ)"
             long_dummy = month_df[["연", "월"]].copy()
             long_dummy["계획/실적"] = "실적"
-            long_dummy["값"] = pd.to_numeric(month_df[act_col], errors="coerce")
+            long_dummy["값"] = pd.to 구_numeric(month_df[act_col], errors="coerce")
             long_dummy = long_dummy.dropna(subset=["값"])
             sel_year, sel_month, years_all = render_section_selector_daily(long_dummy, "공급량(일) 기준 선택", "supplyD_base_")
             st.markdown("---")
