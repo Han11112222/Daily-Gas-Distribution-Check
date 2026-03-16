@@ -316,7 +316,7 @@ def run_tab1_management():
     view_df = df.loc[mask_month_view].copy()
     
     # -------------------------------------------------------------------------
-    # 1️⃣ 열량(GJ) 입력 (소계 포함)
+    # 1️⃣ 열량(GJ) 입력 (소계 포함, 가운데 정렬 적용)
     # -------------------------------------------------------------------------
     st.markdown("##### 1️⃣ 열량(GJ) 및 기온 입력")
     
@@ -342,8 +342,11 @@ def run_tab1_management():
     
     disp_gj = pd.concat([view_df_gj, subtotal_gj], ignore_index=True)
     
+    # [가운데 정렬 스타일 적용]
+    disp_gj_style = disp_gj.style.set_properties(**{'text-align': 'center'}).set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
+    
     edited_gj = st.data_editor(
-        disp_gj,
+        disp_gj_style,
         column_config={
             "날짜": st.column_config.TextColumn("공급일자", disabled=True),
             "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", format="%.1f", step=0.1),
@@ -367,7 +370,7 @@ def run_tab1_management():
     st.markdown("<br>", unsafe_allow_html=True)
     
     # -------------------------------------------------------------------------
-    # 2️⃣ 부피(천 m³) 입력 (소계 포함)
+    # 2️⃣ 부피(천 m³) 입력 (소계 포함, 가운데 정렬 적용)
     # -------------------------------------------------------------------------
     st.markdown("##### 2️⃣ 부피(천 m³) 및 기온 입력")
     view_m3 = view_df[['날짜', '평균기온(℃)', '계획(m3)', '실적(m3)']].copy()
@@ -395,8 +398,11 @@ def run_tab1_management():
     
     disp_m3 = pd.concat([view_m3_disp, subtotal_m3], ignore_index=True)
 
+    # [가운데 정렬 스타일 적용]
+    disp_m3_style = disp_m3.style.set_properties(**{'text-align': 'center'}).set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
+
     edited_m3 = st.data_editor(
-        disp_m3,
+        disp_m3_style,
         column_config={
             "날짜": st.column_config.TextColumn("공급일자", disabled=True),
             "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", format="%.1f", step=0.1),
