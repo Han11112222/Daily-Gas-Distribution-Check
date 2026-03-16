@@ -348,16 +348,16 @@ def run_tab1_management():
         "계획(GJ)": "{:,.0f}",
         "실적(GJ)": "{:,.0f}",
         "달성률(%)": "{:.1f}%"
-    }).set_properties(**{'text-align': 'center'}).set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
+    }, na_rep="-").set_properties(**{'text-align': 'center'}).set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
     
     edited_gj = st.data_editor(
         disp_gj_style,
         column_config={
-            "날짜": st.column_config.TextColumn("공급일자", disabled=True),
-            "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", step=0.1),
-            "계획(GJ)": st.column_config.NumberColumn("계획(GJ)", disabled=True),
-            "실적(GJ)": st.column_config.NumberColumn("실적(GJ) ✏️", min_value=0),
-            "달성률(%)": st.column_config.NumberColumn("달성률(%)", disabled=True),
+            "날짜": st.column_config.Column("공급일자", disabled=True),
+            "평균기온(℃)": st.column_config.Column("평균기온(℃) ✏️"),
+            "계획(GJ)": st.column_config.Column("계획(GJ)", disabled=True),
+            "실적(GJ)": st.column_config.Column("실적(GJ) ✏️"),
+            "달성률(%)": st.column_config.Column("달성률(%)", disabled=True),
         },
         hide_index=True, use_container_width=True, key="editor_gj"
     )
@@ -409,16 +409,16 @@ def run_tab1_management():
         "계획(천m3)": "{:,.0f}",
         "실적(천m3)": "{:,.0f}",
         "달성률(%)": "{:.1f}%"
-    }).set_properties(**{'text-align': 'center'}).set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
+    }, na_rep="-").set_properties(**{'text-align': 'center'}).set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
 
     edited_m3 = st.data_editor(
         disp_m3_style,
         column_config={
-            "날짜": st.column_config.TextColumn("공급일자", disabled=True),
-            "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", step=0.1),
-            "계획(천m3)": st.column_config.NumberColumn("계획(천m³)", disabled=True),
-            "실적(천m3)": st.column_config.NumberColumn("실적(천m³) ✏️", min_value=0),
-            "달성률(%)": st.column_config.NumberColumn("달성률(%)", disabled=True),
+            "날짜": st.column_config.Column("공급일자", disabled=True),
+            "평균기온(℃)": st.column_config.Column("평균기온(℃) ✏️"),
+            "계획(천m3)": st.column_config.Column("계획(천m³)", disabled=True),
+            "실적(천m3)": st.column_config.Column("실적(천m³) ✏️"),
+            "달성률(%)": st.column_config.Column("달성률(%)", disabled=True),
         },
         hide_index=True, use_container_width=True, key="editor_m3"
     )
