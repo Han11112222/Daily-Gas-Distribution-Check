@@ -316,7 +316,7 @@ def run_tab1_management():
     view_df = df.loc[mask_month_view].copy()
     
     # -------------------------------------------------------------------------
-    # 1️⃣ 열량(GJ) 입력 (소계 포함, 가운데 정렬 및 천단위 콤마 적용)
+    # 1️⃣ 열량(GJ) 입력
     # -------------------------------------------------------------------------
     st.markdown("##### 1️⃣ 열량(GJ) 및 기온 입력")
     
@@ -342,40 +342,60 @@ def run_tab1_management():
     
     disp_gj = pd.concat([view_df_gj, subtotal_gj], ignore_index=True)
     
-    # [가운데 정렬 및 천단위 콤마 스타일 적용]
+    # 컬럼명 변경 (에디터 아이콘 추가)
+    disp_gj = disp_gj.rename(columns={
+        "평균기온(℃)": "평균기온(℃) ✏️",
+        "실적(GJ)": "실적(GJ) ✏️"
+    })
+
+    # [스타일 함수 정의] 가운데 정렬 & 소계 행 볼드/배경색 처리
+    def style_gj(row):
+        base = 'text-align: center;'
+        if row['날짜'] == '소계':
+            return [base + ' font-weight: bold; background-color: #e6f3ff; color: #000;'] * len(row)
+        return [base] * len(row)
+
+    # [Pandas Styler] 포맷 강제 적용 (가운데 정렬 + 천 단위 콤마)
     disp_gj_style = disp_gj.style.format({
-        "평균기온(℃)": "{:.1f}",
+        "평균기온(℃) ✏️": "{:.1f}",
         "계획(GJ)": "{:,.0f}",
-        "실적(GJ)": "{:,.0f}",
+        "실적(GJ) ✏️": "{:,.0f}",
         "달성률(%)": "{:.1f}%"
-    }, na_rep="-").set_properties(**{'text-align': 'center'}).set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
+    }, na_rep="-").apply(style_gj, axis=1).set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
     
     edited_gj = st.data_editor(
         disp_gj_style,
         column_config={
             "날짜": st.column_config.Column("공급일자", disabled=True),
-            "평균기온(℃)": st.column_config.Column("평균기온(℃) ✏️"),
             "계획(GJ)": st.column_config.Column("계획(GJ)", disabled=True),
-            "실적(GJ)": st.column_config.Column("실적(GJ) ✏️"),
             "달성률(%)": st.column_config.Column("달성률(%)", disabled=True),
         },
         hide_index=True, use_container_width=True, key="editor_gj"
     )
 
-    # 소계 행 제외하고 원본 업데이트 비교
     edited_gj_data = edited_gj[edited_gj['날짜'] != '소계'].copy()
+    edited_gj_data = edited_gj_data.rename(columns={
+        "평균기온(℃) ✏️": "평균기온(℃)",
+        "실적(GJ) ✏️": "실적(GJ)"
+    })
     
-    check_cols = ['계획(GJ)', '실적(GJ)', '평균기온(℃)']
-    if not edited_gj_data[check_cols].reset_index(drop=True).equals(view_df[check_cols].reset_index(drop=True)):
-        df.loc[mask_month_view, '실적(GJ)'] = edited_gj_data['실적(GJ)'].values
-        df.loc[mask_month_view, '평균기온(℃)'] = edited_gj_data['평균기온(℃)'].values
+    # 에디터에서 문자열로 넘어온 콤마를 제거하고 다시 숫자로 변환
+    edited_gj_data['실적(GJ)'] = pd.to_numeric(edited_gj_data['실적(GJ)'].astype(str).str.replace(',', '', regex=False), errors='coerce').fillna(0)
+    edited_gj_data['평균기온(℃)'] = pd.to_numeric(edited_gj_data['평균기온(℃)'].astype(str).str.replace(',', '', regex=False), errors='coerce')
+
+    view_compare = view_df[['계획(GJ)', '실적(GJ)', '평균기온(℃)']].reset_index(drop=True).astype(float)
+    edit_compare = edited_gj_data[['계획(GJ)', '실적(GJ)', '평균기온(℃)']].reset_index(drop=True).astype(float)
+
+    if not edit_compare.equals(view_compare):
+        df.loc[mask_month_view, '실적(GJ)'] = edit_compare['실적(GJ)'].values
+        df.loc[mask_month_view, '평균기온(℃)'] = edit_compare['평균기온(℃)'].values
         st.session_state.tab1_df = df
         st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
     
     # -------------------------------------------------------------------------
-    # 2️⃣ 부피(천 m³) 입력 (소계 포함, 가운데 정렬 및 천단위 콤마 적용)
+    # 2️⃣ 부피(천 m³) 입력
     # -------------------------------------------------------------------------
     st.markdown("##### 2️⃣ 부피(천 m³) 및 기온 입력")
     view_m3 = view_df[['날짜', '평균기온(℃)', '계획(m3)', '실적(m3)']].copy()
@@ -386,13 +406,11 @@ def run_tab1_management():
     view_m3_disp = view_m3[['날짜', '평균기온(℃)', '계획(천m3)', '실적(천m3)', '달성률(%)']].copy()
     view_m3_disp['날짜'] = view_m3_disp['날짜'].dt.strftime("%Y-%m-%d")
 
-    # 누계 계산
     sum_plan_m3 = view_m3_disp['계획(천m3)'].sum()
     sum_act_m3 = view_m3_disp['실적(천m3)'].sum()
     rate_m3_sum = (sum_act_m3 / sum_plan_m3 * 100) if sum_plan_m3 > 0 else 0.0
     avg_temp_m3 = view_m3_disp['평균기온(℃)'].mean()
 
-    # 소계 행 생성
     subtotal_m3 = pd.DataFrame([{
         '날짜': '소계',
         '평균기온(℃)': avg_temp_m3,
@@ -402,37 +420,57 @@ def run_tab1_management():
     }])
     
     disp_m3 = pd.concat([view_m3_disp, subtotal_m3], ignore_index=True)
+    
+    disp_m3 = disp_m3.rename(columns={
+        "평균기온(℃)": "평균기온(℃) ✏️",
+        "실적(천m3)": "실적(천m3) ✏️"
+    })
 
-    # [가운데 정렬 및 천단위 콤마 스타일 적용]
+    def style_m3(row):
+        base = 'text-align: center;'
+        if row['날짜'] == '소계':
+            return [base + ' font-weight: bold; background-color: #e6f3ff; color: #000;'] * len(row)
+        return [base] * len(row)
+
     disp_m3_style = disp_m3.style.format({
-        "평균기온(℃)": "{:.1f}",
+        "평균기온(℃) ✏️": "{:.1f}",
         "계획(천m3)": "{:,.0f}",
-        "실적(천m3)": "{:,.0f}",
+        "실적(천m3) ✏️": "{:,.0f}",
         "달성률(%)": "{:.1f}%"
-    }, na_rep="-").set_properties(**{'text-align': 'center'}).set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
+    }, na_rep="-").apply(style_m3, axis=1).set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
 
     edited_m3 = st.data_editor(
         disp_m3_style,
         column_config={
             "날짜": st.column_config.Column("공급일자", disabled=True),
-            "평균기온(℃)": st.column_config.Column("평균기온(℃) ✏️"),
             "계획(천m3)": st.column_config.Column("계획(천m³)", disabled=True),
-            "실적(천m3)": st.column_config.Column("실적(천m³) ✏️"),
             "달성률(%)": st.column_config.Column("달성률(%)", disabled=True),
         },
         hide_index=True, use_container_width=True, key="editor_m3"
     )
 
-    # 소계 행 제외하고 원본 업데이트 비교
     edited_m3_data = edited_m3[edited_m3['날짜'] != '소계'].copy()
+    edited_m3_data = edited_m3_data.rename(columns={
+        "평균기온(℃) ✏️": "평균기온(℃)",
+        "실적(천m3) ✏️": "실적(천m3)"
+    })
 
-    check_cols_m3 = ['계획(천m3)', '실적(천m3)', '평균기온(℃)']
-    if not edited_m3_data[check_cols_m3].reset_index(drop=True).equals(view_m3[check_cols_m3].reset_index(drop=True)):
-        new_plan_m3 = edited_m3_data['계획(천m3)'] * 1000
-        new_act_m3 = edited_m3_data['실적(천m3)'] * 1000
+    edited_m3_data['실적(천m3)'] = pd.to_numeric(edited_m3_data['실적(천m3)'].astype(str).str.replace(',', '', regex=False), errors='coerce').fillna(0)
+    edited_m3_data['평균기온(℃)'] = pd.to_numeric(edited_m3_data['평균기온(℃)'].astype(str).str.replace(',', '', regex=False), errors='coerce')
+
+    view_m3_compare = view_df[['계획(m3)', '평균기온(℃)']].copy()
+    view_m3_compare['계획(천m3)'] = view_m3_compare['계획(m3)'].apply(lambda x: int(x/1000) if x > 10000 else int(x))
+    view_m3_compare['실적(천m3)'] = view_df['실적(m3)'].apply(lambda x: int(x/1000) if x > 10000 else int(x))
+    view_m3_compare = view_m3_compare[['계획(천m3)', '실적(천m3)', '평균기온(℃)']].reset_index(drop=True).astype(float)
+
+    edit_m3_compare = edited_m3_data[['계획(천m3)', '실적(천m3)', '평균기온(℃)']].reset_index(drop=True).astype(float)
+
+    if not edit_m3_compare.equals(view_m3_compare):
+        new_plan_m3 = edit_m3_compare['계획(천m3)'] * 1000
+        new_act_m3 = edit_m3_compare['실적(천m3)'] * 1000
         df.loc[mask_month_view, '계획(m3)'] = new_plan_m3.values
         df.loc[mask_month_view, '실적(m3)'] = new_act_m3.values
-        df.loc[mask_month_view, '평균기온(℃)'] = edited_m3_data['평균기온(℃)'].values
+        df.loc[mask_month_view, '평균기온(℃)'] = edit_m3_compare['평균기온(℃)'].values
         st.session_state.tab1_df = df
         st.rerun()
 
