@@ -316,7 +316,7 @@ def run_tab1_management():
     view_df = df.loc[mask_month_view].copy()
     
     # -------------------------------------------------------------------------
-    # 1️⃣ 열량(GJ) 입력 (숫자 우측정렬 유지, 콤마 적용, 소계 강조)
+    # 1️⃣ 열량(GJ) 입력 (콤마, 볼드 처리 확실하게)
     # -------------------------------------------------------------------------
     st.markdown("##### 1️⃣ 열량(GJ) 및 기온 입력")
     
@@ -342,7 +342,7 @@ def run_tab1_management():
     
     disp_gj = pd.concat([view_df_gj, subtotal_gj], ignore_index=True)
     
-    # 숫자형을 문자열로 강제 변환하여 콤마 유지
+    # 💥콤마 강제 유지를 위해 문자열로 변환💥
     disp_gj['계획(GJ)'] = disp_gj['계획(GJ)'].apply(lambda x: f"{x:,.0f}")
     disp_gj['실적(GJ)'] = disp_gj['실적(GJ)'].apply(lambda x: f"{x:,.0f}")
     disp_gj['평균기온(℃)'] = disp_gj['평균기온(℃)'].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
@@ -367,8 +367,11 @@ def run_tab1_management():
         hide_index=True, use_container_width=True, key="editor_gj"
     )
 
-    # 수정된 문자열을 다시 숫자로 복구하여 저장
+    # 문자열 콤마 제거 후 숫자 원상복구 저장 로직 (ValueError 완전 차단)
     edited_gj_data = edited_gj[edited_gj['날짜'] != '소계'].copy()
+    
+    # [핵심] '계획', '실적', '평균기온' 모두 콤마를 빼고 숫자로 변환합니다.
+    edited_gj_data['계획(GJ)'] = pd.to_numeric(edited_gj_data['계획(GJ)'].astype(str).str.replace(',', '', regex=False), errors='coerce').fillna(0)
     edited_gj_data['실적(GJ)'] = pd.to_numeric(edited_gj_data['실적(GJ)'].astype(str).str.replace(',', '', regex=False), errors='coerce').fillna(0)
     edited_gj_data['평균기온(℃)'] = pd.to_numeric(edited_gj_data['평균기온(℃)'].astype(str).str.replace(',', '', regex=False), errors='coerce')
 
@@ -384,7 +387,7 @@ def run_tab1_management():
     st.markdown("<br>", unsafe_allow_html=True)
     
     # -------------------------------------------------------------------------
-    # 2️⃣ 부피(천 m³) 입력 (숫자 기본 우측정렬 수용 + 콤마 + 소계 볼드 강조)
+    # 2️⃣ 부피(천 m³) 입력 (콤마, 볼드 처리 확실하게)
     # -------------------------------------------------------------------------
     st.markdown("##### 2️⃣ 부피(천 m³) 및 기온 입력")
     view_m3 = view_df[['날짜', '평균기온(℃)', '계획(m3)', '실적(m3)']].copy()
@@ -437,8 +440,11 @@ def run_tab1_management():
         hide_index=True, use_container_width=True, key="editor_m3"
     )
 
-    # 문자열 콤마 제거 후 숫자 원상복구 저장 로직
+    # 문자열 콤마 제거 후 숫자 원상복구 저장 로직 (ValueError 완전 차단)
     edited_m3_data = edited_m3[edited_m3['날짜'] != '소계'].copy()
+    
+    # [핵심] '계획', '실적', '평균기온' 모두 콤마를 빼고 숫자로 변환합니다.
+    edited_m3_data['계획(천m3)'] = pd.to_numeric(edited_m3_data['계획(천m3)'].astype(str).str.replace(',', '', regex=False), errors='coerce').fillna(0)
     edited_m3_data['실적(천m3)'] = pd.to_numeric(edited_m3_data['실적(천m3)'].astype(str).str.replace(',', '', regex=False), errors='coerce').fillna(0)
     edited_m3_data['평균기온(℃)'] = pd.to_numeric(edited_m3_data['평균기온(℃)'].astype(str).str.replace(',', '', regex=False), errors='coerce')
 
