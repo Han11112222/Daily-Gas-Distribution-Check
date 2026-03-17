@@ -51,7 +51,7 @@ def get_daegu_temperature(target_date_str):
     """
     API_KEY = "YPnuBBk5fCP55U/+PF8HS2ifcwDclA2+WghIxuodBYRwi58ONaiMm8ATkzzaZSk1nP3dfXBFfEGboryZuZy9IQ=="
 
-    url = http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList
+    url = "http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList"
     params = {
         "serviceKey": API_KEY,
         "pageNo": "1",
@@ -81,7 +81,7 @@ def get_daegu_temperature(target_date_str):
 @st.cache_data(show_spinner=False, ttl=600)
 def load_historical_data_common():
     sheet_id = "13HrIz6OytYDykXeXzXJ02I6XbaKin1YaKBoO2kBd6Bs"
-    sheet_url = fhttps://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0
+    sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0"
     local_path = Path(__file__).parent / "공급량(계획_실적).xlsx"
     df = None
     
@@ -316,7 +316,7 @@ def run_tab1_management():
     view_df = df.loc[mask_month_view].copy()
     
     # -------------------------------------------------------------------------
-    # 1️⃣ 열량(GJ) 입력 (소계 포함, 가운데 정렬 및 천단위 콤마 적용)
+    # 1️⃣ 열량(GJ) 입력 (소계 포함)
     # -------------------------------------------------------------------------
     st.markdown("##### 1️⃣ 열량(GJ) 및 기온 입력")
     
@@ -342,22 +342,14 @@ def run_tab1_management():
     
     disp_gj = pd.concat([view_df_gj, subtotal_gj], ignore_index=True)
     
-    # [가운데 정렬 및 천단위 콤마 스타일 적용]
-    disp_gj_style = disp_gj.style.format({
-        "평균기온(℃)": "{:.1f}",
-        "계획(GJ)": "{:,.0f}",
-        "실적(GJ)": "{:,.0f}",
-        "달성률(%)": "{:.1f}%"
-    }).set_properties(**{'text-align': 'center'}).set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
-    
     edited_gj = st.data_editor(
-        disp_gj_style,
+        disp_gj,
         column_config={
             "날짜": st.column_config.TextColumn("공급일자", disabled=True),
-            "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", step=0.1),
-            "계획(GJ)": st.column_config.NumberColumn("계획(GJ)", disabled=True),
-            "실적(GJ)": st.column_config.NumberColumn("실적(GJ) ✏️", min_value=0),
-            "달성률(%)": st.column_config.NumberColumn("달성률(%)", disabled=True),
+            "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", format="%.1f", step=0.1),
+            "계획(GJ)": st.column_config.NumberColumn("계획(GJ)", format="%d", disabled=True),
+            "실적(GJ)": st.column_config.NumberColumn("실적(GJ) ✏️", format="%d", min_value=0),
+            "달성률(%)": st.column_config.NumberColumn("달성률(%)", format="%.1f%%", disabled=True),
         },
         hide_index=True, use_container_width=True, key="editor_gj"
     )
@@ -375,7 +367,7 @@ def run_tab1_management():
     st.markdown("<br>", unsafe_allow_html=True)
     
     # -------------------------------------------------------------------------
-    # 2️⃣ 부피(천 m³) 입력 (소계 포함, 가운데 정렬 및 천단위 콤마 적용)
+    # 2️⃣ 부피(천 m³) 입력 (소계 포함)
     # -------------------------------------------------------------------------
     st.markdown("##### 2️⃣ 부피(천 m³) 및 기온 입력")
     view_m3 = view_df[['날짜', '평균기온(℃)', '계획(m3)', '실적(m3)']].copy()
@@ -403,22 +395,14 @@ def run_tab1_management():
     
     disp_m3 = pd.concat([view_m3_disp, subtotal_m3], ignore_index=True)
 
-    # [가운데 정렬 및 천단위 콤마 스타일 적용]
-    disp_m3_style = disp_m3.style.format({
-        "평균기온(℃)": "{:.1f}",
-        "계획(천m3)": "{:,.0f}",
-        "실적(천m3)": "{:,.0f}",
-        "달성률(%)": "{:.1f}%"
-    }).set_properties(**{'text-align': 'center'}).set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
-
     edited_m3 = st.data_editor(
-        disp_m3_style,
+        disp_m3,
         column_config={
             "날짜": st.column_config.TextColumn("공급일자", disabled=True),
-            "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", step=0.1),
-            "계획(천m3)": st.column_config.NumberColumn("계획(천m³)", disabled=True),
-            "실적(천m3)": st.column_config.NumberColumn("실적(천m³) ✏️", min_value=0),
-            "달성률(%)": st.column_config.NumberColumn("달성률(%)", disabled=True),
+            "평균기온(℃)": st.column_config.NumberColumn("평균기온(℃) ✏️", format="%.1f", step=0.1),
+            "계획(천m3)": st.column_config.NumberColumn("계획(천m³)", format="%d", disabled=True),
+            "실적(천m3)": st.column_config.NumberColumn("실적(천m³) ✏️", format="%d", min_value=0),
+            "달성률(%)": st.column_config.NumberColumn("달성률(%)", format="%.1f%%", disabled=True),
         },
         hide_index=True, use_container_width=True, key="editor_m3"
     )
