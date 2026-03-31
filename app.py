@@ -219,9 +219,16 @@ def run_tab1_management():
 
     col_date, _ = st.columns([1, 4])
     with col_date:
-        max_date = df[df['실적(GJ)'] > 0]['날짜'].max()
-        if pd.isna(max_date): max_date = pd.to_datetime("2026-01-01")
+        # [수정된 부분] 실적 여부와 상관없이 무조건 '날짜' 컬럼의 최신값을 가져옵니다.
+        max_date = df['날짜'].max()
+        
+        if pd.isna(max_date): 
+            max_date = pd.to_datetime("today").date()
+        else:
+            max_date = max_date.date() # Timestamp 형태를 date 객체로 변환
+            
         selected_date = st.date_input("조회 기준일", value=max_date)
+        
     target_date = pd.to_datetime(selected_date)
 
     mask_day = df['날짜'] == target_date
