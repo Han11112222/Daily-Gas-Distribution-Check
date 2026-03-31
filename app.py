@@ -64,42 +64,32 @@ def get_daegu_temperature(target_date_str):
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=300) # 5분마다 갱신
 def load_historical_data_common():
-    # 형님께서 주신 구글 시트 ID 및 GID 설정
     sheet_id = "13HrIz6OytYDykXeXzXJ02I6XbaKin1YaKBoO2kBd6Bs"
     sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0"
     
     try:
-        # 구글 시트에서 CSV로 데이터 로드
         df = pd.read_csv(sheet_url)
-        
-        # 컬럼명 정리 (공백 제거)
         df.columns = [str(c).replace(" ", "").strip() for c in df.columns]
         
-        # 날짜, 실적(GJ), 부피(m3) 컬럼 자동 감지
         col_date = next((c for c in df.columns if "일자" in c or "날짜" in c or "date" in c.lower()), None)
         col_mj = next((c for c in df.columns if ("실적" in c or "공급량" in c) and ("MJ" in c or "GJ" in c)), None)
         col_m3 = next((c for c in df.columns if ("실적" in c or "공급량" in c) and ("M3" in c or "m3" in c)), None)
         
         if not col_date: return None
         
-        # 데이터 형식 변환
         df[col_date] = pd.to_datetime(df[col_date], errors='coerce')
         df = df.dropna(subset=[col_date])
         
-        # 실적 값 변환 (GJ 기준)
         if col_mj:
             df['val_gj'] = pd.to_numeric(df[col_mj].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
             if "MJ" in col_mj.upper(): df['val_gj'] = df['val_gj'] / 1000.0
         else:
             df['val_gj'] = 0.0
             
-        # 부피 값 변환
         if col_m3:
             df['val_m3'] = pd.to_numeric(df[col_m3].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         else:
             df['val_m3'] = 0.0
-            
-        # [수정] 실적이 0인 데이터도 최신 날짜 조회를 위해 삭제하지 않고 유지합니다.
         
         if "평균기온(℃)" not in df.columns:
              df["평균기온(℃)"] = np.nan
@@ -153,7 +143,6 @@ def run_tab1_management():
             init_df['계획(m3)'] = 0.0
             st.session_state.tab1_df = init_df
         else:
-            # 시트 연결 실패 시에만 오늘 날짜로 기본 데이터 생성
             st.session_state.tab1_df = pd.DataFrame({
                 '날짜': [pd.to_datetime('today').normalize()],
                 '계획(GJ)': [0.0], '실적(GJ)': [0.0], '계획(m3)': [0.0], '실적(m3)': [0.0], '평균기온(℃)': [np.nan]
@@ -161,7 +150,6 @@ def run_tab1_management():
 
     df = st.session_state.tab1_df
 
-    # 계획 데이터 매핑
     df_plan_file = load_2026_plan_data_common()
     if df_plan_file is not None and not df_plan_file.empty:
         plan_gj_map = df_plan_file.set_index('날짜')['plan_gj']
@@ -175,26 +163,28 @@ def run_tab1_management():
     
     st.title("🔥 도시가스 공급실적 관리")
 
-    # [수정된 날짜 선택 로직]
+    # --------------------------------------------------------------------------
+    # [수정된 부분] 날짜 선택 로직 완벽 복구
+    # --------------------------------------------------------------------------
     col_date, col_refresh = st.columns([1, 4])
     with col_date:
-        # 실적 유무와 관계없이 데이터 상의 가장 마지막(최신) 날짜를 찾습니다.
-        max_date_val = pd.to_datetime(df['날짜']).max()
+        # 실제 실적이 0보다 크게 입력된 유효한 데이터만 추려냅니다.
+        valid_df = df[df['실적(GJ)'] > 0]
         
-        if pd.isna(max_date_val): 
-            default_date = pd.to_datetime("today").date()
+        if not valid_df.empty:
+            # 실적이 존재하는 가장 최신(마지막) 날짜를 디폴트로 잡습니다.
+            default_date = valid_df['날짜'].max().date()
         else:
-            default_date = max_date_val.date()
+            # 실적 데이터가 아예 없는 상황이라면 오늘 날짜를 디폴트로 합니다.
+            default_date = pd.to_datetime("today").date()
             
         selected_date = st.date_input("조회 기준일", value=default_date)
         
     target_date = pd.to_datetime(selected_date)
 
-    # 선택된 날짜의 데이터 필터링
     mask_day = df['날짜'] == target_date
     current_row = df[mask_day]
 
-    # 날짜 데이터가 없으면 새로 생성
     if current_row.empty:
         p_gj, p_m3 = 0, 0
         if df_plan_file is not None:
@@ -207,7 +197,6 @@ def run_tab1_management():
         st.session_state.tab1_df = df
         current_row = df[df['날짜'] == target_date]
 
-    # 기온 API 호출 및 자동 입력
     if pd.isna(current_row['평균기온(℃)'].iloc[0]):
         api_temp = get_daegu_temperature(target_date.strftime("%Y%m%d"))
         if api_temp is not None:
@@ -215,7 +204,6 @@ def run_tab1_management():
             st.session_state.tab1_df = df
             st.toast(f"⛅ {target_date.strftime('%Y-%m-%d')} 대구 기온({api_temp}℃) 자동 입력됨")
 
-    # 메트릭 표시 및 실적 입력 UI (기존과 동일하되 데이터는 df에서 추출)
     current_val_gj = float(current_row['실적(GJ)'].iloc[0])
     plan_val_gj = float(current_row['계획(GJ)'].iloc[0])
     
@@ -245,7 +233,6 @@ def run_tab1_management():
     st.markdown("---")
     st.subheader(f"📝 {target_date.month}월 실적 입력")
     
-    # 해당 월의 데이터만 필터링하여 편집기 표시
     mask_month = (df['날짜'].dt.year == target_date.year) & (df['날짜'].dt.month == target_date.month)
     view_df = df[mask_month].sort_values('날짜').copy()
     view_df['날짜'] = view_df['날짜'].dt.strftime("%Y-%m-%d")
@@ -261,7 +248,6 @@ def run_tab1_management():
         hide_index=True, use_container_width=True, key="editor_tab1"
     )
 
-    # 데이터 업데이트 감지 및 저장
     if not edited_df.equals(view_df[['날짜', '평균기온(℃)', '계획(GJ)', '실적(GJ)']]):
         df.loc[mask_month, '실적(GJ)'] = edited_df['실적(GJ)'].values
         df.loc[mask_month, '평균기온(℃)'] = edited_df['평균기온(℃)'].values
@@ -273,16 +259,10 @@ def run_tab1_management():
 # ==============================================================================
 # [탭 2] 공급량 분석 및 메인 실행부
 # ==============================================================================
-# (기존 분석 코드는 구조가 동일하므로 run_tab2_analysis 생략 또는 유지)
-# ... [기존 run_tab2_analysis 및 기타 함수들 유지] ...
-
 def run_tab2_analysis():
-    # 이 부분은 형님의 기존 분석 로직을 그대로 유지하시거나, 
-    # 위에서 불러온 st.session_state.tab1_df를 활용하도록 연결할 수 있습니다.
     st.title("📊 도시가스 공급량 분석")
     st.info("실적 관리 탭에서 입력된 데이터를 바탕으로 정밀 분석을 수행합니다.")
 
-# 메인 실행부
 st.sidebar.title("통합 메뉴")
 menu = st.sidebar.radio("이동", ["1. 도시가스 공급실적 관리", "2. 공급량 분석"])
 
