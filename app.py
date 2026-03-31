@@ -51,7 +51,7 @@ def get_daegu_temperature(target_date_str):
     """
     API_KEY = "YPnuBBk5fCP55U/+PF8HS2ifcwDclA2+WghIxuodBYRwi58ONaiMm8ATkzzaZSk1nP3dfXBFfEGboryZuZy9IQ=="
 
-    url = "http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList"
+    url = http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList
     params = {
         "serviceKey": API_KEY,
         "pageNo": "1",
@@ -81,7 +81,7 @@ def get_daegu_temperature(target_date_str):
 @st.cache_data(show_spinner=False, ttl=600)
 def load_historical_data_common():
     sheet_id = "13HrIz6OytYDykXeXzXJ02I6XbaKin1YaKBoO2kBd6Bs"
-    sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0"
+    sheet_url = fhttps://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0
     local_path = Path(__file__).parent / "공급량(계획_실적).xlsx"
     df = None
     
