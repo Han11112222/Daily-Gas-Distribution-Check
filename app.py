@@ -46,7 +46,7 @@ set_korean_font()
 @st.cache_data(ttl=3600)
 def get_daegu_temperature(target_date_str):
     API_KEY = "YPnuBBk5fCP55U/+PF8HS2ifcwDclA2+WghIxuodBYRwi58ONaiMm8ATkzzaZSk1nP3dfXBFfEGboryZuZy9IQ=="
-    url = "http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList"
+    url = http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList
     params = {
         "serviceKey": API_KEY, "pageNo": "1", "numOfRows": "10", "dataType": "JSON",
         "dataCd": "ASOS", "dateCd": "DAY", "startDt": target_date_str, "endDt": target_date_str, "stnIds": "143"
@@ -65,7 +65,7 @@ def get_daegu_temperature(target_date_str):
 @st.cache_data(show_spinner=False, ttl=300) # 5분마다 갱신
 def load_historical_data_common():
     sheet_id = "13HrIz6OytYDykXeXzXJ02I6XbaKin1YaKBoO2kBd6Bs"
-    sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0"
+    sheet_url = fhttps://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0
     
     try:
         df = pd.read_csv(sheet_url)
