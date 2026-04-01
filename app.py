@@ -91,7 +91,8 @@ def load_historical_data_common():
             if df_sheet[col].dtype == 'object':
                 try:
                     if "일자" not in col and "date" not in col.lower():
-                        df_sheet[col] = df_sheet[col].str.replace(',', '').astype(float)
+                        # [수정된 부분] 데이터의 콤마를 안전하게 제거하도록 보강
+                        df_sheet[col] = df_sheet[col].astype(str).str.replace(',', '').astype(float)
                 except: pass
         df = df_sheet
     except Exception:
@@ -117,11 +118,14 @@ def load_historical_data_common():
         df[col_date] = pd.to_datetime(df[col_date], errors='coerce')
         df = df.dropna(subset=[col_date])
         
-        df['val_gj'] = pd.to_numeric(df[col_mj], errors='coerce').fillna(0)
+        # [수정된 부분] 콤마가 남아있을 경우를 대비해 다시 한번 안전하게 숫자 변환
+        df['val_gj'] = pd.to_numeric(df[col_mj].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         if "MJ" in col_mj.upper(): df['val_gj'] = df['val_gj'] / 1000.0
         
-        if col_m3: df['val_m3'] = pd.to_numeric(df[col_m3], errors='coerce').fillna(0)
-        else: df['val_m3'] = 0
+        if col_m3: 
+            df['val_m3'] = pd.to_numeric(df[col_m3].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        else: 
+            df['val_m3'] = 0
             
         df = df[df['val_gj'] > 0].copy()
         
@@ -217,9 +221,6 @@ def run_tab1_management():
     
     st.title("🔥 도시가스 공급실적 관리")
 
-    # -------------------------------------------------------------------------
-    # [수정된 부분] 날짜 선택 (실적이 있는 최신 날짜로 하되, 없으면 오늘 날짜)
-    # -------------------------------------------------------------------------
     col_date, _ = st.columns([1, 4])
     with col_date:
         valid_df = df[df['실적(GJ)'] > 0]
