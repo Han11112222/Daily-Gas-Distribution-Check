@@ -184,6 +184,30 @@ def load_2026_plan_data_common():
         return df[['날짜', 'plan_gj', 'plan_m3']]
     except: return None
 
+# ─────────────────────────────────────────────────────────
+# [공통 함수 3] 기온 매트릭스용 구글시트 데이터 로드 (1번째 코드와 동일 소스)
+# ─────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False, ttl=600)
+def load_temperature_sheet():
+    sheet_id = "13HrIz6OytYDykXeXzXJ02I6XbaKin1YaKBoO2kBd6Bs"
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0"
+    try:
+        df = pd.read_csv(url)
+        df.columns = [str(c).replace(" ", "").strip() for c in df.columns]
+        if "일자" not in df.columns or "평균기온(℃)" not in df.columns:
+            return None
+        df["일자"] = pd.to_datetime(df["일자"], errors="coerce")
+        df["평균기온(℃)"] = pd.to_numeric(
+            df["평균기온(℃)"].astype(str).str.replace(",", ""), errors="coerce"
+        )
+        df = df.dropna(subset=["일자"])
+        df["연도"] = df["일자"].dt.year
+        df["월"] = df["일자"].dt.month
+        df["일"] = df["일자"].dt.day
+        return df[["일자", "연도", "월", "일", "평균기온(℃)"]]
+    except Exception:
+        return None
+
 
 # ==============================================================================
 # [탭 1] 도시가스 공급실적 관리
@@ -554,49 +578,82 @@ def run_tab2_analysis():
 
     def temperature_matrix(day_df, default_month, key_prefix):
         st.markdown("### 🌡️ 기온 매트릭스 (일별 평균기온)")
-        if day_df.empty or "평균기온(℃)" not in day_df.columns: return
-        day_df = day_df.copy()
-        day_df["연"] = day_df["일자"].dt.year
-        day_df["월"] = day_df["일자"].dt.month
-        day_df["일"] = day_df["일자"].dt.day
-        years = sorted(day_df["연"].unique().tolist())
-        if not years: return
-        min_y, max_y = years[0], years[-1]
+
+        # 1) 구글 스프레드시트 우선 사용 (1번째 코드와 동일 데이터)
+        temp_df = load_temperature_sheet()
+
+        # 2) 실패 시 엑셀 일별실적으로 대체 (0으로 채워진 값은 결측 처리)
+        if temp_df is None or temp_df.empty:
+            if day_df.empty or "평균기온(℃)" not in day_df.columns:
+                st.info("기온 데이터가 없습니다.")
+                return
+            temp_df = day_df[["일자", "평균기온(℃)"]].copy()
+            temp_df["평균기온(℃)"] = temp_df["평균기온(℃)"].replace(0, np.nan)
+            temp_df["연도"] = temp_df["일자"].dt.year
+            temp_df["월"] = temp_df["일자"].dt.month
+            temp_df["일"] = temp_df["일자"].dt.day
+
+        min_y = int(temp_df["연도"].min())
+        max_y = int(temp_df["연도"].max())
+
         c1, c2 = st.columns([2, 1.2])
-        with c1: yr_range = st.slider("연도 범위", min_value=min_y, max_value=max_y, value=(min_y, max_y), step=1, key=f"{key_prefix}yr_range")
-        with c2: sel_m = st.selectbox("월 선택", options=list(range(1, 13)), index=default_month - 1, key=f"{key_prefix}month")
-        sub = day_df[(day_df["연"].between(yr_range[0], yr_range[1])) & (day_df["월"] == sel_m)]
-        if sub.empty: return
-        pivot = sub.pivot_table(index="일", columns="연", values="평균기온(℃)", aggfunc="mean").reindex(range(1, 32))
-        avg_row = pivot.mean(axis=0).to_frame().T
-        avg_row.index = ["평균"]
-        pivot2 = pd.concat([pivot, avg_row], axis=0)
-        
-        fig = px.imshow(
-            pivot2, 
-            aspect="auto", 
-            labels=dict(x="연도", y="일", color="°C"), 
+        with c1:
+            yr_range = st.slider(
+                "기온 매트릭스 연도 범위 설정",
+                min_value=min_y, max_value=max_y,
+                value=(min_y, max_y), step=1,
+                key=f"{key_prefix}yr_range"
+            )
+        with c2:
+            sel_m = st.selectbox(
+                "월 선택", options=list(range(1, 13)),
+                index=default_month - 1,
+                format_func=lambda x: f"{x}월",
+                key=f"{key_prefix}month"
+            )
+
+        filtered_df = temp_df[
+            (temp_df["월"] == sel_m) &
+            (temp_df["연도"] >= yr_range[0]) &
+            (temp_df["연도"] <= yr_range[1])
+        ]
+        if filtered_df.empty:
+            st.info("선택한 조건의 데이터가 없습니다.")
+            return
+
+        pivot_df = filtered_df.pivot_table(
+            index="일", columns="연도", values="평균기온(℃)", aggfunc="mean"
+        )
+        pivot_df = pivot_df.reindex(list(range(1, 32)))
+
+        avg_series = filtered_df.groupby("연도")["평균기온(℃)"].mean()
+        pivot_df.loc["평균"] = avg_series
+
+        pivot_df.index = pivot_df.index.astype(str)
+        pivot_df.columns = pivot_df.columns.astype(str)
+
+        fig_heatmap = px.imshow(
+            pivot_df,
+            labels=dict(x="연도", y="일", color="평균기온(℃)"),
+            x=pivot_df.columns,
+            y=pivot_df.index,
             color_continuous_scale="RdBu_r",
+            aspect="auto",
             text_auto=".1f"
         )
-        
-        fig.update_layout(
-            height=780, 
-            margin=dict(l=10, r=10, t=30, b=10), 
-            coloraxis_colorbar=dict(title="°C"),
-            xaxis=dict(fixedrange=True, title="연도"),
-            yaxis=dict(fixedrange=True, title="일"),
-            dragmode=False,
-            hovermode="closest"
+
+        fig_heatmap.update_layout(
+            height=1000,
+            margin=dict(l=40, r=40, t=80, b=40),
+            yaxis=dict(type="category", tickmode="linear", dtick=1, autorange="reversed"),
+            xaxis=dict(type="category", tickmode="linear", dtick=1, side="top")
         )
-        
-        fig.update_traces(
-            textfont={"size": 10}, 
+        fig_heatmap.update_traces(
+            textfont=dict(size=14),
             hovertemplate="<b>%{x}년 " + str(sel_m) + "월 %{y}일</b><br>🌡️ 평균기온: %{z:.1f}℃<extra></extra>"
         )
-        
-        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-        
+
+        st.plotly_chart(fig_heatmap, use_container_width=True)
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
 
     def temperature_supply_band_section(day_df, default_month, key_prefix):
