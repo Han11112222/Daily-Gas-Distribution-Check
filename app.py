@@ -897,29 +897,67 @@ def run_tab2_analysis():
             if show_min and cum_df["최저기온(℃)"].isna().all():
                 st.warning("최저기온 데이터를 가져오지 못했습니다. (구글시트 '최저' 열과 기상청 API 모두 값이 없음)")
 
-            # 팔레트: 과거=슬레이트 그레이, 기준연도=로열 블루, 평균기온=앰버, 최저기온=틸
-            C_PAST, C_SEL, C_AVG, C_MIN, C_TXT = "#94A3B8", "#2563EB", "#F08C00", "#0F9D7A", "#475569"
-            C_AVG_TXT, C_MIN_TXT = "#B45309", "#047857"  # 기온 라벨 글자색(가독성용으로 한 톤 진하게)
-            C_HH, C_HH_TXT = "#7C3AED", "#5B21B6"        # 가정용 청구전수(바이올렛)
-            bar_colors = [C_SEL if c == f"{sel_year}년" else C_PAST for c in cum_df["연도"]]
+            # 팔레트: 과거=슬레이트 그레이, 기준연도=딥 블루, 평균기온=앰버, 최저기온=틸, 가정용 청구전수=스카이 블루
+            C_PAST, C_SEL, C_AVG, C_MIN, C_TXT = "#94A3B8", "#1E40AF", "#F08C00", "#0F9D7A", "#475569"
+            C_AVG_TXT, C_MIN_TXT = "#B45309", "#047857"          # 기온 라벨 글자색(회색 막대 위)
+            C_AVG_TXT_SEL, C_MIN_TXT_SEL = "#FDE68A", "#6EE7B7"  # 기준연도(진한 파랑 막대) 위에서는 밝은 글자색
+            C_HH, C_HH_TXT = "#0EA5E9", "#0369A1"
+            sel_label = f"{sel_year}년"
+            bar_colors = [C_SEL if c == sel_label else C_PAST for c in cum_df["연도"]]
 
-            # 기온선이 막대 상단 숫자와 겹치지 않도록 보조축(기온) 범위를 조정해,
-            # 기온선을 '가장 짧은 막대의 상단보다 아래' 영역(막대 몸통 안쪽)에 배치
+            # ── 세로 배치(보조축 범위 조정) ──
+            # 기온선은 '가장 짧은 막대의 상단보다 아래'(막대 몸통 안쪽)에 두어 막대 상단 숫자와 겹치지 않게 하고,
+            # 평균기온/최저기온은 각각 따로 눈금을 잡아 위아래 폭이 크게 보이도록 함
             # 가정용 청구전수를 켜면 막대 위쪽에 선이 들어갈 여백을 더 확보
-            y1_max = float(cum_df["누적공급량(GJ)"].max()) * (1.4 if show_hh else 1.15)
-            t_cols = ["평균기온(℃)"] + (["최저기온(℃)"] if show_min else [])
-            t_vals = pd.concat([cum_df[c] for c in t_cols]).dropna()
-            y2_range = None
-            if not t_vals.empty:
-                bar_top_min = float(cum_df["누적공급량(GJ)"].min()) / y1_max
-                band_lo, band_hi = 0.12, max(0.30, bar_top_min - 0.12)
-                v_min, v_max = float(t_vals.min()), float(t_vals.max())
-                if v_max - v_min < 1.0:  # 거의 평평하면 최소 폭 확보
+            y1_max = float(cum_df["누적공급량(GJ)"].max()) * (1.35 if show_hh else 1.15)
+
+            def band_range(vals, lo_frac, hi_frac, min_span):
+                """vals가 축 높이의 lo_frac~hi_frac 구간에 놓이도록 하는 축 범위를 반환"""
+                v_min, v_max = float(vals.min()), float(vals.max())
+                if v_max - v_min < min_span:  # 거의 평평하면 최소 폭 확보
                     mid = (v_max + v_min) / 2
-                    v_min, v_max = mid - 0.5, mid + 0.5
-                span = (v_max - v_min) / (band_hi - band_lo)
-                y2_lo = v_min - band_lo * span
-                y2_range = [y2_lo, y2_lo + span]
+                    v_min, v_max = mid - min_span / 2, mid + min_span / 2
+                span = (v_max - v_min) / (hi_frac - lo_frac)
+                lo = v_min - lo_frac * span
+                return [lo, lo + span]
+
+            def label_positions(vals):
+                """꺾은선 라벨이 자기 선과 겹치지 않도록 점마다 위치 선택:
+                봉우리=위, 골짜기=아래, 오르막=왼쪽 위, 내리막=오른쪽 위"""
+                v = list(vals)
+                pos = []
+                for i, cur in enumerate(v):
+                    if pd.isna(cur):
+                        pos.append("top center")
+                        continue
+                    prev_v = v[i - 1] if i > 0 and pd.notna(v[i - 1]) else cur
+                    next_v = v[i + 1] if i < len(v) - 1 and pd.notna(v[i + 1]) else cur
+                    if cur >= prev_v and cur >= next_v:
+                        pos.append("top center")
+                    elif cur <= prev_v and cur <= next_v:
+                        pos.append("bottom center")
+                    elif prev_v < cur:
+                        pos.append("top left")
+                    else:
+                        pos.append("top right")
+                return pos
+
+            bar_top_min = float(cum_df["누적공급량(GJ)"].min()) / y1_max
+            zone_lo, zone_hi = 0.10, max(0.30, bar_top_min - 0.10)
+            zone_h = zone_hi - zone_lo
+            if show_min:
+                min_band = (zone_lo, zone_lo + 0.28 * zone_h)
+                avg_band = (zone_lo + 0.55 * zone_h, zone_hi)
+            else:
+                min_band, avg_band = None, (zone_lo, zone_hi)
+
+            avg_vals = cum_df["평균기온(℃)"].dropna()
+            avg_range = band_range(avg_vals, avg_band[0], avg_band[1], 2.0) if not avg_vals.empty else None
+            min_range = None
+            if show_min:
+                min_vals = cum_df["최저기온(℃)"].dropna()
+                if not min_vals.empty:
+                    min_range = band_range(min_vals, min_band[0], min_band[1], 2.0)
 
             # 가정용 청구전수는 막대 위쪽 여백 영역에 별도(숨김) 축으로 배치
             hh_range = None
@@ -929,14 +967,9 @@ def run_tab2_analysis():
                     st.info("선택한 연도의 가정용 청구전수 데이터가 없습니다.")
                 else:
                     bar_top_max = float(cum_df["누적공급량(GJ)"].max()) / y1_max
-                    hh_lo = bar_top_max + 0.10
-                    hh_hi = min(0.90, hh_lo + 0.12)
-                    h_min, h_max = float(hh_vals.min()), float(hh_vals.max())
-                    if h_max - h_min < 1:
-                        h_min, h_max = h_min - 0.5, h_max + 0.5
-                    h_span = (h_max - h_min) / (hh_hi - hh_lo)
-                    h_lo = h_min - hh_lo * h_span
-                    hh_range = [h_lo, h_lo + h_span]
+                    hh_lo = bar_top_max + 0.08
+                    hh_hi = min(0.94, hh_lo + 0.11)
+                    hh_range = band_range(hh_vals, hh_lo, hh_hi, 1.0)
 
             # 그래프는 폭을 넓히고(약 70%), 표는 그래프 바로 아래에 배치
             chart_col, _ = st.columns([7, 3])
@@ -955,32 +988,34 @@ def run_tab2_analysis():
                     secondary_y=False,
                 )
 
-                def add_temp_line(col, name, color, txt_color, dash, symbol, text_pos):
-                    # 흰색 바탕선(케이싱)을 먼저 깔아 회색 막대 위에서도 선이 또렷하게 보이도록 함
+                def add_temp_line(col, name, color, txt_color, txt_color_sel, dash, symbol, axis):
+                    # 흰색 바탕선(케이싱)을 먼저 깔아 막대 위에서도 선이 또렷하게 보이도록 함
                     fig_cum.add_trace(
                         go.Scatter(
-                            x=cum_df["연도"], y=cum_df[col], mode="lines",
+                            x=cum_df["연도"], y=cum_df[col], mode="lines", yaxis=axis,
                             line=dict(color="rgba(255,255,255,0.9)", width=6),
                             hoverinfo="skip", showlegend=False,
-                        ),
-                        secondary_y=True,
+                        )
                     )
+                    # 기준연도(진한 파랑 막대) 위의 라벨만 밝은 글자색으로 표시
+                    label_colors = [txt_color_sel if c == sel_label else txt_color for c in cum_df["연도"]]
                     fig_cum.add_trace(
                         go.Scatter(
-                            x=cum_df["연도"], y=cum_df[col], name=f"{name}(℃)", mode="lines+markers+text",
+                            x=cum_df["연도"], y=cum_df[col], name=f"{name}(℃)",
+                            mode="lines+markers+text", yaxis=axis,
                             line=dict(color=color, width=2.5, dash=dash),
                             marker=dict(size=9, symbol=symbol, color=color, line=dict(color="white", width=2)),
                             text=cum_df[col].map(lambda v: f"<b>{v:.1f}℃</b>" if pd.notna(v) else ""),
-                            textposition=text_pos,
-                            textfont=dict(color=txt_color, size=12),
+                            textposition=label_positions(cum_df[col]),
+                            textfont=dict(color=label_colors, size=12),
                             hovertemplate="%{x}<br>" + name + ": %{y:.1f}℃<extra></extra>",
-                        ),
-                        secondary_y=True,
+                        )
                     )
 
-                add_temp_line("평균기온(℃)", "평균기온", C_AVG, C_AVG_TXT, "solid", "circle", "top center")
-                if show_min:
-                    add_temp_line("최저기온(℃)", "최저기온", C_MIN, C_MIN_TXT, "dot", "diamond", "bottom center")
+                # 평균기온=보조축(y2), 최저기온=별도 축(y4), 가정용 청구전수=별도 축(y3) — 모두 눈금은 숨김
+                add_temp_line("평균기온(℃)", "평균기온", C_AVG, C_AVG_TXT, C_AVG_TXT_SEL, "solid", "circle", "y2")
+                if show_min and min_range is not None:
+                    add_temp_line("최저기온(℃)", "최저기온", C_MIN, C_MIN_TXT, C_MIN_TXT_SEL, "dot", "diamond", "y4")
                 if show_hh and hh_range is not None:
                     fig_cum.add_trace(
                         go.Scatter(
@@ -998,7 +1033,7 @@ def run_tab2_analysis():
 
                 # 제목은 넣지 않고(위 소제목/캡션으로 대체), 범례는 아래로 이동해 겹침 방지
                 fig_cum.update_layout(
-                    height=430,
+                    height=560,
                     margin=dict(l=10, r=10, t=20, b=70),
                     legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5),
                     bargap=0.4,
@@ -1014,8 +1049,13 @@ def run_tab2_analysis():
                 # 기온 값은 각 점의 라벨로 표시하므로 보조축 눈금은 숨김
                 fig_cum.update_yaxes(
                     secondary_y=True, visible=False, showgrid=False,
-                    zeroline=False, range=y2_range
+                    zeroline=False, range=avg_range
                 )
+                if show_min and min_range is not None:
+                    fig_cum.update_layout(yaxis4=dict(
+                        overlaying="y", side="right", visible=False,
+                        showgrid=False, zeroline=False, range=min_range
+                    ))
                 if show_hh and hh_range is not None:
                     fig_cum.update_layout(yaxis3=dict(
                         overlaying="y", side="right", visible=False,
