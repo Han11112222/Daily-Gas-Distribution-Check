@@ -42,6 +42,16 @@ def set_korean_font():
             pass
 set_korean_font()
 
+# 가정용 청구전수 (연도별, 단위: 전) — 새 연도 데이터가 생기면 아래에 한 줄 추가하세요. (예: 2026: 1230000)
+HOUSEHOLD_BILLED = {
+    2020: 1155788,
+    2021: 1168927,
+    2022: 1178960,
+    2023: 1190819,
+    2024: 1202218,
+    2025: 1211203,
+}
+
 # ─────────────────────────────────────────────────────────
 # [NEW] 기상청 API 호출 함수 (대구: 143)
 # ─────────────────────────────────────────────────────────
@@ -826,7 +836,7 @@ def run_tab2_analysis():
         cutoff_day = int(this_df["일"].max()) if not this_df.empty else 31
 
         # 제목(좌) + 옵션 토글(우측 상단)
-        hd_title, hd_opt1, hd_opt2 = st.columns([3, 1.4, 1])
+        hd_title, hd_opt1, hd_opt2, hd_opt3 = st.columns([3, 1.5, 0.9, 1.3])
         with hd_title:
             st.markdown(f"### 📊 {sel_month}월 연도별 누적 공급량 · 평균기온 비교")
         with hd_opt1:
@@ -836,6 +846,8 @@ def run_tab2_analysis():
             )
         with hd_opt2:
             show_min = st.toggle("최저기온", value=False, key=f"{key_prefix}cum_min")
+        with hd_opt3:
+            show_hh = st.toggle("가정용 청구전수", value=False, key=f"{key_prefix}cum_hh")
 
         period_txt = f"1~{cutoff_day}일" if use_cutoff else "월말까지(월 전체)"
         st.caption(f"집계 기간: {sel_month}월 {period_txt}")
@@ -874,6 +886,8 @@ def run_tab2_analysis():
             if show_min:
                 # 집계 기간 중 가장 낮았던 일 최저기온
                 row["최저기온(℃)"] = min_temp_by_day(y, sel_month, sub["일"].tolist()).min()
+            if show_hh:
+                row["가정용 청구전수"] = HOUSEHOLD_BILLED.get(int(y), np.nan)
             row["일수"] = len(sub)
             cum_rows.append(row)
 
@@ -886,11 +900,13 @@ def run_tab2_analysis():
             # 팔레트: 과거=슬레이트 그레이, 기준연도=로열 블루, 평균기온=앰버, 최저기온=틸
             C_PAST, C_SEL, C_AVG, C_MIN, C_TXT = "#94A3B8", "#2563EB", "#F08C00", "#0F9D7A", "#475569"
             C_AVG_TXT, C_MIN_TXT = "#B45309", "#047857"  # 기온 라벨 글자색(가독성용으로 한 톤 진하게)
+            C_HH, C_HH_TXT = "#7C3AED", "#5B21B6"        # 가정용 청구전수(바이올렛)
             bar_colors = [C_SEL if c == f"{sel_year}년" else C_PAST for c in cum_df["연도"]]
 
             # 기온선이 막대 상단 숫자와 겹치지 않도록 보조축(기온) 범위를 조정해,
             # 기온선을 '가장 짧은 막대의 상단보다 아래' 영역(막대 몸통 안쪽)에 배치
-            y1_max = float(cum_df["누적공급량(GJ)"].max()) * 1.15
+            # 가정용 청구전수를 켜면 막대 위쪽에 선이 들어갈 여백을 더 확보
+            y1_max = float(cum_df["누적공급량(GJ)"].max()) * (1.4 if show_hh else 1.15)
             t_cols = ["평균기온(℃)"] + (["최저기온(℃)"] if show_min else [])
             t_vals = pd.concat([cum_df[c] for c in t_cols]).dropna()
             y2_range = None
@@ -904,6 +920,23 @@ def run_tab2_analysis():
                 span = (v_max - v_min) / (band_hi - band_lo)
                 y2_lo = v_min - band_lo * span
                 y2_range = [y2_lo, y2_lo + span]
+
+            # 가정용 청구전수는 막대 위쪽 여백 영역에 별도(숨김) 축으로 배치
+            hh_range = None
+            if show_hh:
+                hh_vals = cum_df["가정용 청구전수"].dropna()
+                if hh_vals.empty:
+                    st.info("선택한 연도의 가정용 청구전수 데이터가 없습니다.")
+                else:
+                    bar_top_max = float(cum_df["누적공급량(GJ)"].max()) / y1_max
+                    hh_lo = bar_top_max + 0.10
+                    hh_hi = min(0.90, hh_lo + 0.12)
+                    h_min, h_max = float(hh_vals.min()), float(hh_vals.max())
+                    if h_max - h_min < 1:
+                        h_min, h_max = h_min - 0.5, h_max + 0.5
+                    h_span = (h_max - h_min) / (hh_hi - hh_lo)
+                    h_lo = h_min - hh_lo * h_span
+                    hh_range = [h_lo, h_lo + h_span]
 
             # 그래프는 폭을 넓히고(약 70%), 표는 그래프 바로 아래에 배치
             chart_col, _ = st.columns([7, 3])
@@ -948,6 +981,20 @@ def run_tab2_analysis():
                 add_temp_line("평균기온(℃)", "평균기온", C_AVG, C_AVG_TXT, "solid", "circle", "top center")
                 if show_min:
                     add_temp_line("최저기온(℃)", "최저기온", C_MIN, C_MIN_TXT, "dot", "diamond", "bottom center")
+                if show_hh and hh_range is not None:
+                    fig_cum.add_trace(
+                        go.Scatter(
+                            x=cum_df["연도"], y=cum_df["가정용 청구전수"], name="가정용 청구전수",
+                            mode="lines+markers+text", yaxis="y3",
+                            line=dict(color=C_HH, width=2.5, dash="dash"),
+                            marker=dict(size=8, symbol="square", color=C_HH, line=dict(color="white", width=2)),
+                            text=cum_df["가정용 청구전수"].map(lambda v: f"<b>{v:,.0f}</b>" if pd.notna(v) else ""),
+                            textposition="top center",
+                            textfont=dict(color=C_HH_TXT, size=11),
+                            cliponaxis=False,
+                            hovertemplate="%{x}<br>가정용 청구전수: %{y:,.0f}<extra></extra>",
+                        )
+                    )
 
                 # 제목은 넣지 않고(위 소제목/캡션으로 대체), 범례는 아래로 이동해 겹침 방지
                 fig_cum.update_layout(
@@ -969,10 +1016,16 @@ def run_tab2_analysis():
                     secondary_y=True, visible=False, showgrid=False,
                     zeroline=False, range=y2_range
                 )
+                if show_hh and hh_range is not None:
+                    fig_cum.update_layout(yaxis3=dict(
+                        overlaying="y", side="right", visible=False,
+                        showgrid=False, zeroline=False, range=hh_range
+                    ))
                 st.plotly_chart(fig_cum, use_container_width=True)
 
             with chart_col:
-                fmt = {"누적공급량(GJ)": "{:,.1f}", "평균기온(℃)": "{:.1f}", "최저기온(℃)": "{:.1f}", "일수": "{:.0f}"}
+                fmt = {"누적공급량(GJ)": "{:,.1f}", "평균기온(℃)": "{:.1f}", "최저기온(℃)": "{:.1f}",
+                       "가정용 청구전수": "{:,.0f}", "일수": "{:.0f}"}
                 fmt = {k: v for k, v in fmt.items() if k in cum_df.columns}
                 st.dataframe(
                     center_style(cum_df.style.format(fmt, na_rep="-")),
