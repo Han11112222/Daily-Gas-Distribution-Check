@@ -244,7 +244,15 @@ def load_temperature_sheet():
         df["연도"] = df["일자"].dt.year
         df["월"] = df["일자"].dt.month
         df["일"] = df["일자"].dt.day
-        return df[["일자", "연도", "월", "일", "평균기온(℃)"]]
+        # 시트의 '최저' 열(E열)을 최저기온으로 사용
+        min_src = next((c for c in df.columns if "최저" in c), None)
+        if min_src is not None:
+            df["최저기온(℃)"] = pd.to_numeric(
+                df[min_src].astype(str).str.replace(",", ""), errors="coerce"
+            )
+        else:
+            df["최저기온(℃)"] = np.nan
+        return df[["일자", "연도", "월", "일", "평균기온(℃)", "최저기온(℃)"]]
     except Exception:
         return None
 
@@ -820,8 +828,22 @@ def run_tab2_analysis():
         period_txt = f"1~{cutoff_day}일" if use_cutoff else "월말까지(월 전체)"
         st.caption(f"집계 기간: {sel_month}월 {period_txt}")
 
-        # 일별실적에 '최저' 열이 있으면 우선 사용, 없으면 기상청 API(대구 143) 사용
-        min_col = next((c for c in df_all.columns if "최저" in str(c)), None)
+        # 최저기온: 구글시트 '최저' 열 우선, 시트에 값이 없는 날짜는 기상청 API(대구 143)로 보충
+        def min_temp_by_day(y, month, days):
+            idx = sorted({int(d) for d in days})
+            result = pd.Series(np.nan, index=idx, dtype=float)
+            ts = load_temperature_sheet()
+            if ts is not None and "최저기온(℃)" in ts.columns:
+                s = (ts[(ts["연도"] == y) & (ts["월"] == month)]
+                     .drop_duplicates("일", keep="last")
+                     .set_index("일")["최저기온(℃)"])
+                result = s.reindex(idx)
+            if result.isna().any():
+                mt = get_daegu_month_temps(int(y), int(month))
+                if mt is not None and not mt.empty:
+                    m = mt.drop_duplicates("일", keep="last").set_index("일")["최저기온"].reindex(idx)
+                    result = result.fillna(m)
+            return result
 
         cum_rows = []
         for y in cmp_years:
@@ -838,14 +860,8 @@ def run_tab2_analysis():
                 "평균기온(℃)": temp_s.mean(),
             }
             if show_min:
-                min_val = np.nan
-                if min_col:
-                    min_val = pd.to_numeric(sub[min_col], errors="coerce").min()
-                else:
-                    mt = get_daegu_month_temps(int(y), int(sel_month))
-                    if mt is not None and not mt.empty:
-                        min_val = mt[mt["일"].isin(sub["일"])]["최저기온"].min()
-                row["최저기온(℃)"] = min_val
+                # 집계 기간 중 가장 낮았던 일 최저기온
+                row["최저기온(℃)"] = min_temp_by_day(y, sel_month, sub["일"].tolist()).min()
             row["일수"] = len(sub)
             cum_rows.append(row)
 
@@ -853,12 +869,14 @@ def run_tab2_analysis():
             cum_df = pd.DataFrame(cum_rows)
 
             if show_min and cum_df["최저기온(℃)"].isna().all():
-                st.warning("최저기온 데이터를 가져오지 못했습니다. (일별실적에 최저기온 열이 없고 기상청 API 응답도 없음)")
+                st.warning("최저기온 데이터를 가져오지 못했습니다. (구글시트 '최저' 열과 기상청 API 모두 값이 없음)")
 
-            bar_colors = ["#000000" if c == f"{sel_year}년" else "#93C5FD" for c in cum_df["연도"]]
+            # 차분한 팔레트: 과거=연한 슬레이트, 기준연도=인디고, 평균기온=앰버, 최저기온=틸
+            C_PAST, C_SEL, C_AVG, C_MIN, C_TXT = "#CBD5E1", "#3B5BDB", "#F08C00", "#0CA678", "#64748B"
+            bar_colors = [C_SEL if c == f"{sel_year}년" else C_PAST for c in cum_df["연도"]]
 
-            # 그래프는 좌측 절반, 표는 우측 절반
-            chart_col, table_col = st.columns(2)
+            # 그래프는 좌측 절반 폭, 표는 그래프 바로 아래
+            chart_col, _ = st.columns(2)
 
             with chart_col:
                 fig_cum = make_subplots(specs=[[{"secondary_y": True}]])
@@ -868,6 +886,7 @@ def run_tab2_analysis():
                         name="누적 공급량(GJ)", marker_color=bar_colors,
                         text=cum_df["누적공급량(GJ)"].map(lambda v: f"{v:,.0f}"),
                         textposition="outside",
+                        textfont=dict(color=C_TXT, size=12),
                         hovertemplate="%{x}<br>누적: %{y:,.0f} GJ<extra></extra>",
                     ),
                     secondary_y=False,
@@ -876,9 +895,11 @@ def run_tab2_analysis():
                     go.Scatter(
                         x=cum_df["연도"], y=cum_df["평균기온(℃)"],
                         name="평균기온(℃)", mode="lines+markers+text",
-                        line=dict(color="#FF4B4B", width=3), marker=dict(size=9),
+                        line=dict(color=C_AVG, width=2.5),
+                        marker=dict(size=9, color=C_AVG, line=dict(color="white", width=2)),
                         text=cum_df["평균기온(℃)"].map(lambda v: f"{v:.1f}℃" if pd.notna(v) else ""),
                         textposition="top center",
+                        textfont=dict(color=C_AVG, size=12),
                         hovertemplate="%{x}<br>평균기온: %{y:.1f}℃<extra></extra>",
                     ),
                     secondary_y=True,
@@ -888,10 +909,11 @@ def run_tab2_analysis():
                         go.Scatter(
                             x=cum_df["연도"], y=cum_df["최저기온(℃)"],
                             name="최저기온(℃)", mode="lines+markers+text",
-                            line=dict(color="#7C3AED", width=3, dash="dot"),
-                            marker=dict(size=9, symbol="diamond"),
+                            line=dict(color=C_MIN, width=2.5, dash="dot"),
+                            marker=dict(size=9, symbol="diamond", color=C_MIN, line=dict(color="white", width=2)),
                             text=cum_df["최저기온(℃)"].map(lambda v: f"{v:.1f}℃" if pd.notna(v) else ""),
                             textposition="bottom center",
+                            textfont=dict(color=C_MIN, size=12),
                             hovertemplate="%{x}<br>최저기온: %{y:.1f}℃<extra></extra>",
                         ),
                         secondary_y=True,
@@ -902,16 +924,23 @@ def run_tab2_analysis():
                     height=430,
                     margin=dict(l=10, r=10, t=20, b=70),
                     legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5),
-                    bargap=0.35,
+                    bargap=0.4,
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(size=12, color=C_TXT),
                 )
+                fig_cum.update_xaxes(showgrid=False, linecolor="rgba(148,163,184,0.5)")
                 fig_cum.update_yaxes(
                     title_text="누적 공급량 (GJ)", secondary_y=False,
-                    range=[0, float(cum_df["누적공급량(GJ)"].max()) * 1.15]
+                    range=[0, float(cum_df["누적공급량(GJ)"].max()) * 1.15],
+                    gridcolor="rgba(148,163,184,0.25)", zeroline=False
                 )
-                fig_cum.update_yaxes(title_text="기온 (℃)", secondary_y=True, showgrid=False)
+                fig_cum.update_yaxes(
+                    title_text="기온 (℃)", secondary_y=True,
+                    showgrid=False, zeroline=False, tickformat=".1f"
+                )
                 st.plotly_chart(fig_cum, use_container_width=True)
 
-            with table_col:
+            with chart_col:
                 fmt = {"누적공급량(GJ)": "{:,.1f}", "평균기온(℃)": "{:.1f}", "최저기온(℃)": "{:.1f}", "일수": "{:.0f}"}
                 fmt = {k: v for k, v in fmt.items() if k in cum_df.columns}
                 st.dataframe(
