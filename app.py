@@ -905,8 +905,8 @@ def run_tab2_analysis():
                 y2_lo = v_min - band_lo * span
                 y2_range = [y2_lo, y2_lo + span]
 
-            # 그래프는 좌측, 표는 우측
-            chart_col, table_col = st.columns(2)
+            # 그래프는 폭을 넓히고(약 70%), 표는 그래프 바로 아래에 배치
+            chart_col, _ = st.columns([7, 3])
 
             with chart_col:
                 fig_cum = make_subplots(specs=[[{"secondary_y": True}]])
@@ -922,7 +922,7 @@ def run_tab2_analysis():
                     secondary_y=False,
                 )
 
-                def add_temp_line(col, name, color, txt_color, dash, symbol, shift):
+                def add_temp_line(col, name, color, txt_color, dash, symbol, text_pos):
                     # 흰색 바탕선(케이싱)을 먼저 깔아 회색 막대 위에서도 선이 또렷하게 보이도록 함
                     fig_cum.add_trace(
                         go.Scatter(
@@ -934,27 +934,20 @@ def run_tab2_analysis():
                     )
                     fig_cum.add_trace(
                         go.Scatter(
-                            x=cum_df["연도"], y=cum_df[col], name=f"{name}(℃)", mode="lines+markers",
+                            x=cum_df["연도"], y=cum_df[col], name=f"{name}(℃)", mode="lines+markers+text",
                             line=dict(color=color, width=2.5, dash=dash),
                             marker=dict(size=9, symbol=symbol, color=color, line=dict(color="white", width=2)),
+                            text=cum_df[col].map(lambda v: f"<b>{v:.1f}℃</b>" if pd.notna(v) else ""),
+                            textposition=text_pos,
+                            textfont=dict(color=txt_color, size=12),
                             hovertemplate="%{x}<br>" + name + ": %{y:.1f}℃<extra></extra>",
                         ),
                         secondary_y=True,
                     )
-                    # 값 라벨은 흰색 반투명 박스로 표시(막대 색과 상관없이 읽히도록)
-                    for x_val, y_val in zip(cum_df["연도"], cum_df[col]):
-                        if pd.notna(y_val):
-                            fig_cum.add_annotation(
-                                x=x_val, y=y_val, xref="x", yref="y2",
-                                text=f"{y_val:.1f}℃", showarrow=False, yshift=shift,
-                                font=dict(color=txt_color, size=11),
-                                bgcolor="rgba(255,255,255,0.88)", bordercolor=color,
-                                borderwidth=1, borderpad=2,
-                            )
 
-                add_temp_line("평균기온(℃)", "평균기온", C_AVG, C_AVG_TXT, "solid", "circle", 17)
+                add_temp_line("평균기온(℃)", "평균기온", C_AVG, C_AVG_TXT, "solid", "circle", "top center")
                 if show_min:
-                    add_temp_line("최저기온(℃)", "최저기온", C_MIN, C_MIN_TXT, "dot", "diamond", -17)
+                    add_temp_line("최저기온(℃)", "최저기온", C_MIN, C_MIN_TXT, "dot", "diamond", "bottom center")
 
                 # 제목은 넣지 않고(위 소제목/캡션으로 대체), 범례는 아래로 이동해 겹침 방지
                 fig_cum.update_layout(
@@ -978,7 +971,7 @@ def run_tab2_analysis():
                 )
                 st.plotly_chart(fig_cum, use_container_width=True)
 
-            with table_col:
+            with chart_col:
                 fmt = {"누적공급량(GJ)": "{:,.1f}", "평균기온(℃)": "{:.1f}", "최저기온(℃)": "{:.1f}", "일수": "{:.0f}"}
                 fmt = {k: v for k, v in fmt.items() if k in cum_df.columns}
                 st.dataframe(
