@@ -5,6 +5,7 @@ import io
 import matplotlib as mpl
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import requests
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -758,6 +759,84 @@ def run_tab2_analysis():
             fig1.add_scatter(x=this_df["일"], y=this_df[act_col] / 1000.0, mode="lines+markers", name=f"{sel_year}년 {sel_month}월 실적", line=dict(color="black", width=4), hovertemplate="%{y:,.0f} GJ<extra></extra>")
         fig1.update_layout(title=f"{sel_year}년 {sel_month}월 일별 공급량 패턴", xaxis_title="일", yaxis_title="공급량 (GJ)", margin=dict(l=10, r=10, t=50, b=10))
         st.plotly_chart(fig1, use_container_width=True)
+
+        # ─────────────────────────────────────────────
+        # 📊 [NEW] 연도별 월 누적 공급량 · 평균기온 비교
+        # ─────────────────────────────────────────────
+        st.markdown(f"### 📊 {sel_month}월 연도별 누적 공급량 · 평균기온 비교")
+
+        cmp_years = sorted(set(past_years + [sel_year]))
+        cutoff_day = int(this_df["일"].max()) if not this_df.empty else 31
+
+        basis = st.radio(
+            "누적 기준",
+            [f"동일 기간 (1~{cutoff_day}일)", "월 전체"],
+            horizontal=True,
+            key=f"{key_prefix}cum_basis"
+        )
+
+        cum_rows = []
+        for y in cmp_years:
+            sub = df_all[(df_all["연"] == y) & (df_all["월"] == sel_month)].copy()
+            if basis.startswith("동일"):
+                sub = sub[sub["일"] <= cutoff_day]
+            sub = sub[sub[act_col] > 0]
+            if sub.empty:
+                continue
+            temp_s = sub["평균기온(℃)"].replace(0, np.nan)  # 0으로 채워진 결측 제외
+            cum_rows.append({
+                "연도": f"{y}년",
+                "누적공급량(GJ)": sub[act_col].sum() / 1000.0,
+                "평균기온(℃)": temp_s.mean(),
+                "일수": len(sub),
+            })
+
+        if cum_rows:
+            cum_df = pd.DataFrame(cum_rows)
+
+            bar_colors = ["#000000" if c == f"{sel_year}년" else "#93C5FD" for c in cum_df["연도"]]
+
+            fig_cum = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_cum.add_trace(
+                go.Bar(
+                    x=cum_df["연도"], y=cum_df["누적공급량(GJ)"],
+                    name="누적 공급량(GJ)", marker_color=bar_colors,
+                    text=cum_df["누적공급량(GJ)"].map(lambda v: f"{v:,.0f}"),
+                    textposition="outside",
+                    hovertemplate="%{x}<br>누적: %{y:,.0f} GJ<extra></extra>",
+                ),
+                secondary_y=False,
+            )
+            fig_cum.add_trace(
+                go.Scatter(
+                    x=cum_df["연도"], y=cum_df["평균기온(℃)"],
+                    name="평균기온(℃)", mode="lines+markers+text",
+                    line=dict(color="#FF4B4B", width=3), marker=dict(size=9),
+                    text=cum_df["평균기온(℃)"].map(lambda v: f"{v:.1f}℃" if pd.notna(v) else ""),
+                    textposition="top center",
+                    hovertemplate="%{x}<br>평균기온: %{y:.1f}℃<extra></extra>",
+                ),
+                secondary_y=True,
+            )
+            period_txt = f"1~{cutoff_day}일" if basis.startswith("동일") else "월 전체"
+            fig_cum.update_layout(
+                title=f"{sel_month}월 {period_txt} 누적 공급량 vs 평균기온",
+                margin=dict(l=10, r=10, t=50, b=10),
+                legend=dict(orientation="h", y=1.12),
+            )
+            fig_cum.update_yaxes(title_text="누적 공급량 (GJ)", secondary_y=False)
+            fig_cum.update_yaxes(title_text="평균기온 (℃)", secondary_y=True, showgrid=False)
+            st.plotly_chart(fig_cum, use_container_width=True)
+
+            st.dataframe(
+                center_style(cum_df.style.format(
+                    {"누적공급량(GJ)": "{:,.1f}", "평균기온(℃)": "{:.1f}", "일수": "{:.0f}"},
+                    na_rep="-"
+                )),
+                use_container_width=True, hide_index=True
+            )
+        else:
+            st.info("비교할 누적 데이터가 없습니다.")
         
         if not this_df.empty and plan_curve_x:
             st.markdown("### 🧮 일일계획 대비 편차")
