@@ -77,6 +77,45 @@ def get_daegu_temperature(target_date_str):
     return None
 
 # ─────────────────────────────────────────────────────────
+# [NEW] 기상청 API: 대구(143) 월간 일별 최저기온 (연·월 단위 1회 호출)
+# ─────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_daegu_month_temps(year: int, month: int):
+    """
+    ASOS 일자료에서 대구(143)의 해당 연·월 일별 최저기온을 가져옵니다.
+    반환: DataFrame(일, 최저기온) 또는 None
+    """
+    import calendar
+    API_KEY = "YPnuBBk5fCP55U/+PF8HS2ifcwDclA2+WghIxuodBYRwi58ONaiMm8ATkzzaZSk1nP3dfXBFfEGboryZuZy9IQ=="
+    last_day = calendar.monthrange(year, month)[1]
+    url = "http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList"
+    params = {
+        "serviceKey": API_KEY,
+        "pageNo": "1",
+        "numOfRows": "40",
+        "dataType": "JSON",
+        "dataCd": "ASOS",
+        "dateCd": "DAY",
+        "startDt": f"{year}{month:02d}01",
+        "endDt": f"{year}{month:02d}{last_day:02d}",
+        "stnIds": "143",
+    }
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        items = data['response']['body']['items']['item']
+        rows = []
+        for it in items:
+            rows.append({
+                "일": pd.to_datetime(it['tm']).day,
+                "최저기온": pd.to_numeric(it.get('minTa'), errors='coerce'),
+            })
+        out = pd.DataFrame(rows)
+        return out if not out.empty else None
+    except Exception:
+        return None
+
+# ─────────────────────────────────────────────────────────
 # [공통 함수 1] 실적 데이터 로드 (구글시트 -> 엑셀 -> 기온API 결합)
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=600)
@@ -763,78 +802,122 @@ def run_tab2_analysis():
         # ─────────────────────────────────────────────
         # 📊 [NEW] 연도별 월 누적 공급량 · 평균기온 비교
         # ─────────────────────────────────────────────
-        st.markdown(f"### 📊 {sel_month}월 연도별 누적 공급량 · 평균기온 비교")
-
         cmp_years = sorted(set(past_years + [sel_year]))
         cutoff_day = int(this_df["일"].max()) if not this_df.empty else 31
 
-        basis = st.radio(
-            "누적 기준",
-            [f"동일 기간 (1~{cutoff_day}일)", "월 전체"],
-            horizontal=True,
-            key=f"{key_prefix}cum_basis"
-        )
+        # 제목(좌) + 옵션 토글(우측 상단)
+        hd_title, hd_opt1, hd_opt2 = st.columns([3, 1.4, 1])
+        with hd_title:
+            st.markdown(f"### 📊 {sel_month}월 연도별 누적 공급량 · 평균기온 비교")
+        with hd_opt1:
+            use_cutoff = st.toggle(
+                f"현재 누적일수 비교 (1~{cutoff_day}일)", value=False,
+                key=f"{key_prefix}cum_cutoff"
+            )
+        with hd_opt2:
+            show_min = st.toggle("최저기온", value=False, key=f"{key_prefix}cum_min")
+
+        period_txt = f"1~{cutoff_day}일" if use_cutoff else "월말까지(월 전체)"
+        st.caption(f"집계 기간: {sel_month}월 {period_txt}")
+
+        # 일별실적에 '최저' 열이 있으면 우선 사용, 없으면 기상청 API(대구 143) 사용
+        min_col = next((c for c in df_all.columns if "최저" in str(c)), None)
 
         cum_rows = []
         for y in cmp_years:
             sub = df_all[(df_all["연"] == y) & (df_all["월"] == sel_month)].copy()
-            if basis.startswith("동일"):
+            if use_cutoff:
                 sub = sub[sub["일"] <= cutoff_day]
             sub = sub[sub[act_col] > 0]
             if sub.empty:
                 continue
             temp_s = sub["평균기온(℃)"].replace(0, np.nan)  # 0으로 채워진 결측 제외
-            cum_rows.append({
+            row = {
                 "연도": f"{y}년",
                 "누적공급량(GJ)": sub[act_col].sum() / 1000.0,
                 "평균기온(℃)": temp_s.mean(),
-                "일수": len(sub),
-            })
+            }
+            if show_min:
+                min_val = np.nan
+                if min_col:
+                    min_val = pd.to_numeric(sub[min_col], errors="coerce").min()
+                else:
+                    mt = get_daegu_month_temps(int(y), int(sel_month))
+                    if mt is not None and not mt.empty:
+                        min_val = mt[mt["일"].isin(sub["일"])]["최저기온"].min()
+                row["최저기온(℃)"] = min_val
+            row["일수"] = len(sub)
+            cum_rows.append(row)
 
         if cum_rows:
             cum_df = pd.DataFrame(cum_rows)
 
+            if show_min and cum_df["최저기온(℃)"].isna().all():
+                st.warning("최저기온 데이터를 가져오지 못했습니다. (일별실적에 최저기온 열이 없고 기상청 API 응답도 없음)")
+
             bar_colors = ["#000000" if c == f"{sel_year}년" else "#93C5FD" for c in cum_df["연도"]]
 
-            fig_cum = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_cum.add_trace(
-                go.Bar(
-                    x=cum_df["연도"], y=cum_df["누적공급량(GJ)"],
-                    name="누적 공급량(GJ)", marker_color=bar_colors,
-                    text=cum_df["누적공급량(GJ)"].map(lambda v: f"{v:,.0f}"),
-                    textposition="outside",
-                    hovertemplate="%{x}<br>누적: %{y:,.0f} GJ<extra></extra>",
-                ),
-                secondary_y=False,
-            )
-            fig_cum.add_trace(
-                go.Scatter(
-                    x=cum_df["연도"], y=cum_df["평균기온(℃)"],
-                    name="평균기온(℃)", mode="lines+markers+text",
-                    line=dict(color="#FF4B4B", width=3), marker=dict(size=9),
-                    text=cum_df["평균기온(℃)"].map(lambda v: f"{v:.1f}℃" if pd.notna(v) else ""),
-                    textposition="top center",
-                    hovertemplate="%{x}<br>평균기온: %{y:.1f}℃<extra></extra>",
-                ),
-                secondary_y=True,
-            )
-            period_txt = f"1~{cutoff_day}일" if basis.startswith("동일") else "월 전체"
-            fig_cum.update_layout(
-                title=f"{sel_month}월 {period_txt} 누적 공급량 vs 평균기온",
-                margin=dict(l=10, r=10, t=50, b=10),
-                legend=dict(orientation="h", y=1.12),
-            )
-            fig_cum.update_yaxes(title_text="누적 공급량 (GJ)", secondary_y=False)
-            fig_cum.update_yaxes(title_text="평균기온 (℃)", secondary_y=True, showgrid=False)
-            st.plotly_chart(fig_cum, use_container_width=True)
+            # 그래프는 좌측 절반, 표는 우측 절반
+            chart_col, table_col = st.columns(2)
 
-            st.dataframe(
-                center_style(cum_df.style.format(
-                    {"누적공급량(GJ)": "{:,.1f}", "평균기온(℃)": "{:.1f}", "일수": "{:.0f}"},
-                    na_rep="-"
-                )),
-                use_container_width=True, hide_index=True
-            )
+            with chart_col:
+                fig_cum = make_subplots(specs=[[{"secondary_y": True}]])
+                fig_cum.add_trace(
+                    go.Bar(
+                        x=cum_df["연도"], y=cum_df["누적공급량(GJ)"],
+                        name="누적 공급량(GJ)", marker_color=bar_colors,
+                        text=cum_df["누적공급량(GJ)"].map(lambda v: f"{v:,.0f}"),
+                        textposition="outside",
+                        hovertemplate="%{x}<br>누적: %{y:,.0f} GJ<extra></extra>",
+                    ),
+                    secondary_y=False,
+                )
+                fig_cum.add_trace(
+                    go.Scatter(
+                        x=cum_df["연도"], y=cum_df["평균기온(℃)"],
+                        name="평균기온(℃)", mode="lines+markers+text",
+                        line=dict(color="#FF4B4B", width=3), marker=dict(size=9),
+                        text=cum_df["평균기온(℃)"].map(lambda v: f"{v:.1f}℃" if pd.notna(v) else ""),
+                        textposition="top center",
+                        hovertemplate="%{x}<br>평균기온: %{y:.1f}℃<extra></extra>",
+                    ),
+                    secondary_y=True,
+                )
+                if show_min:
+                    fig_cum.add_trace(
+                        go.Scatter(
+                            x=cum_df["연도"], y=cum_df["최저기온(℃)"],
+                            name="최저기온(℃)", mode="lines+markers+text",
+                            line=dict(color="#7C3AED", width=3, dash="dot"),
+                            marker=dict(size=9, symbol="diamond"),
+                            text=cum_df["최저기온(℃)"].map(lambda v: f"{v:.1f}℃" if pd.notna(v) else ""),
+                            textposition="bottom center",
+                            hovertemplate="%{x}<br>최저기온: %{y:.1f}℃<extra></extra>",
+                        ),
+                        secondary_y=True,
+                    )
+
+                # 제목은 넣지 않고(위 소제목/캡션으로 대체), 범례는 아래로 이동해 겹침 방지
+                fig_cum.update_layout(
+                    height=430,
+                    margin=dict(l=10, r=10, t=20, b=70),
+                    legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5),
+                    bargap=0.35,
+                )
+                fig_cum.update_yaxes(
+                    title_text="누적 공급량 (GJ)", secondary_y=False,
+                    range=[0, float(cum_df["누적공급량(GJ)"].max()) * 1.15]
+                )
+                fig_cum.update_yaxes(title_text="기온 (℃)", secondary_y=True, showgrid=False)
+                st.plotly_chart(fig_cum, use_container_width=True)
+
+            with table_col:
+                fmt = {"누적공급량(GJ)": "{:,.1f}", "평균기온(℃)": "{:.1f}", "최저기온(℃)": "{:.1f}", "일수": "{:.0f}"}
+                fmt = {k: v for k, v in fmt.items() if k in cum_df.columns}
+                st.dataframe(
+                    center_style(cum_df.style.format(fmt, na_rep="-")),
+                    use_container_width=True, hide_index=True
+                )
         else:
             st.info("비교할 누적 데이터가 없습니다.")
         
