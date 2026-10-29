@@ -932,7 +932,7 @@ def run_tab2_analysis():
             # 기온선은 '가장 짧은 막대의 상단보다 아래'(막대 몸통 안쪽)에 두어 막대 상단 숫자와 겹치지 않게 하고,
             # 평균기온/최저기온은 각각 따로 눈금을 잡아 위아래 폭이 크게 보이도록 함
             # 가정용 청구전수를 켜면 막대 위쪽에 선이 들어갈 여백을 더 확보
-            y1_max = float(cum_df["누적공급량(GJ)"].max()) * (1.35 if show_hh else 1.15)
+            y1_max = float(cum_df["누적공급량(GJ)"].max()) * (1.3 if show_hh else 1.15)
 
             def band_range(vals, lo_frac, hi_frac, min_span):
                 """vals가 축 높이의 lo_frac~hi_frac 구간에 놓이도록 하는 축 범위를 반환"""
@@ -965,20 +965,17 @@ def run_tab2_analysis():
                         pos.append("top right")
                 return pos
 
-            # 기온선 영역: 막대 몸통의 세로 중앙(막대 높이 중앙값의 절반)을 중심으로 위아래 대칭 배치.
-            # 단, 가장 짧은 막대의 상단 숫자와 겹치지 않도록 상한을 두고, 바닥에 붙지 않도록 하한을 둠
-            bar_fracs = cum_df["누적공급량(GJ)"] / y1_max
-            bar_top_min = float(bar_fracs.min())
-            top_limit = max(0.30, bar_top_min - 0.07)
-            mid = max(0.18, min(0.5 * float(bar_fracs.median()), top_limit - 0.10))
-            half = max(0.10, min(mid - 0.08, top_limit - mid, 0.20))
-            zone_lo, zone_hi = mid - half, mid + half
-            zone_h = zone_hi - zone_lo
+            # 기온선 위치: 평균기온선의 중심을 '가장 짧은 막대의 세로 중앙'에 맞춤
+            # (→ 모든 막대의 몸통 안쪽, 막대 높이의 중간대). 최저기온선은 그 아래에 배치.
+            bar_top_min = float((cum_df["누적공급량(GJ)"] / y1_max).min())
+            avg_half = 0.075 if show_min else min(0.16, max(0.08, 0.5 * bar_top_min - 0.08))
+            mid_floor = 0.26 if show_min else 0.16
+            mid = max(mid_floor, min(0.5 * bar_top_min, bar_top_min - 0.07 - avg_half))
+            avg_band = (mid - avg_half, mid + avg_half)
             if show_min:
-                min_band = (zone_lo, zone_lo + 0.28 * zone_h)
-                avg_band = (zone_lo + 0.55 * zone_h, zone_hi)
+                min_band = (0.05, avg_band[0] - 0.085)  # 평균기온선 아래, 라벨이 겹치지 않도록 간격 확보
             else:
-                min_band, avg_band = None, (zone_lo, zone_hi)
+                min_band = None
 
             avg_vals = cum_df["평균기온(℃)"].dropna()
             avg_range = band_range(avg_vals, avg_band[0], avg_band[1], 2.0) if not avg_vals.empty else None
@@ -997,7 +994,7 @@ def run_tab2_analysis():
                 else:
                     bar_top_max = float(cum_df["누적공급량(GJ)"].max()) / y1_max
                     hh_lo = bar_top_max + 0.08
-                    hh_hi = min(0.94, hh_lo + 0.11)
+                    hh_hi = min(0.94, hh_lo + 0.065)  # 상승 폭을 작게 잡아 완만한 기울기로 표현
                     hh_range = band_range(hh_vals, hh_lo, hh_hi, 1.0)
 
             # 그래프는 폭을 넓히고(약 70%), 표는 그래프 바로 아래에 배치
