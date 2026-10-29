@@ -42,15 +42,34 @@ def set_korean_font():
             pass
 set_korean_font()
 
-# 가정용 청구전수 (연도별, 단위: 전) — 새 연도 데이터가 생기면 아래에 한 줄 추가하세요. (예: 2026: 1230000)
-HOUSEHOLD_BILLED = {
-    2020: 1155788,
-    2021: 1168927,
-    2022: 1178960,
-    2023: 1190819,
-    2024: 1202218,
-    2025: 1211203,
+# 가정용 청구전수 월별총계 (단위: 전) — (연, 월): 값
+# 다른 월·연도 자료가 생기면 아래에 한 줄씩 추가하세요. (예: (2026, 10): 1200000)
+HOUSEHOLD_MONTHLY = {
+    (2016, 10): 975242,
+    (2017, 10): 1011921,
+    (2018, 10): 1050535,
+    (2019, 10): 1079111,
+    (2020, 10): 1094948,
+    (2021, 10): 1115881,
+    (2022, 10): 1137543,
+    (2023, 10): 1154516,
+    (2024, 10): 1170260,
+    (2025, 10): 1186038,
+    (2026, 9): 1197445,
 }
+
+def household_total(year, month):
+    """선택 연·월의 가정용 청구전수(월별총계)를 (값, 실제 사용한 (연, 월))로 반환.
+    아직 집계되지 않은 최신 시점(예: 2026년 10월)은 가장 최근 월 값으로 대체하고,
+    과거 시점의 누락은 NaN으로 처리한다."""
+    key = (int(year), int(month))
+    if key in HOUSEHOLD_MONTHLY:
+        return HOUSEHOLD_MONTHLY[key], key
+    last = max(HOUSEHOLD_MONTHLY)
+    has_month = any(k[1] == key[1] for k in HOUSEHOLD_MONTHLY)
+    if has_month and key > last:
+        return HOUSEHOLD_MONTHLY[last], last
+    return np.nan, None
 
 # ─────────────────────────────────────────────────────────
 # [NEW] 기상청 API 호출 함수 (대구: 143)
@@ -869,6 +888,7 @@ def run_tab2_analysis():
                     result = result.fillna(m)
             return result
 
+        hh_fallback = {}  # 선택 월 자료가 없어 최근 월 값으로 대체한 연도 {"2026년": 9}
         cum_rows = []
         for y in cmp_years:
             sub = df_all[(df_all["연"] == y) & (df_all["월"] == sel_month)].copy()
@@ -887,7 +907,10 @@ def run_tab2_analysis():
                 # 집계 기간 중 가장 낮았던 일 최저기온
                 row["최저기온(℃)"] = min_temp_by_day(y, sel_month, sub["일"].tolist()).min()
             if show_hh:
-                row["가정용 청구전수"] = HOUSEHOLD_BILLED.get(int(y), np.nan)
+                hh_val, hh_used = household_total(y, sel_month)
+                row["가정용 청구전수"] = hh_val
+                if hh_used is not None and hh_used != (int(y), int(sel_month)):
+                    hh_fallback[f"{y}년"] = hh_used[1]
             row["일수"] = len(sub)
             cum_rows.append(row)
 
@@ -942,8 +965,14 @@ def run_tab2_analysis():
                         pos.append("top right")
                 return pos
 
-            bar_top_min = float(cum_df["누적공급량(GJ)"].min()) / y1_max
-            zone_lo, zone_hi = 0.10, max(0.30, bar_top_min - 0.10)
+            # 기온선 영역: 막대 몸통의 세로 중앙(막대 높이 중앙값의 절반)을 중심으로 위아래 대칭 배치.
+            # 단, 가장 짧은 막대의 상단 숫자와 겹치지 않도록 상한을 두고, 바닥에 붙지 않도록 하한을 둠
+            bar_fracs = cum_df["누적공급량(GJ)"] / y1_max
+            bar_top_min = float(bar_fracs.min())
+            top_limit = max(0.30, bar_top_min - 0.07)
+            mid = max(0.18, min(0.5 * float(bar_fracs.median()), top_limit - 0.10))
+            half = max(0.10, min(mid - 0.08, top_limit - mid, 0.20))
+            zone_lo, zone_hi = mid - half, mid + half
             zone_h = zone_hi - zone_lo
             if show_min:
                 min_band = (zone_lo, zone_lo + 0.28 * zone_h)
@@ -964,7 +993,7 @@ def run_tab2_analysis():
             if show_hh:
                 hh_vals = cum_df["가정용 청구전수"].dropna()
                 if hh_vals.empty:
-                    st.info("선택한 연도의 가정용 청구전수 데이터가 없습니다.")
+                    st.info(f"{sel_month}월 가정용 청구전수 데이터가 없습니다. (코드 상단 HOUSEHOLD_MONTHLY에 (연, 월): 값을 추가하세요)")
                 else:
                     bar_top_max = float(cum_df["누적공급량(GJ)"].max()) / y1_max
                     hh_lo = bar_top_max + 0.08
@@ -1023,7 +1052,10 @@ def run_tab2_analysis():
                             mode="lines+markers+text", yaxis="y3",
                             line=dict(color=C_HH, width=2.5, dash="dash"),
                             marker=dict(size=8, symbol="square", color=C_HH, line=dict(color="white", width=2)),
-                            text=cum_df["가정용 청구전수"].map(lambda v: f"<b>{v:,.0f}</b>" if pd.notna(v) else ""),
+                            text=[
+                                (f"<b>{v:,.0f}{'*' if yr in hh_fallback else ''}</b>" if pd.notna(v) else "")
+                                for yr, v in zip(cum_df["연도"], cum_df["가정용 청구전수"])
+                            ],
                             textposition="top center",
                             textfont=dict(color=C_HH_TXT, size=11),
                             cliponaxis=False,
@@ -1071,6 +1103,11 @@ def run_tab2_analysis():
                     center_style(cum_df.style.format(fmt, na_rep="-")),
                     use_container_width=True, hide_index=True
                 )
+                if show_hh and hh_fallback:
+                    st.caption(
+                        "※ 가정용 청구전수 * 표시: 해당 월 자료가 아직 없어 가장 최근 월 값을 사용 ("
+                        + ", ".join(f"{k} {m}월" for k, m in hh_fallback.items()) + ")"
+                    )
         else:
             st.info("비교할 누적 데이터가 없습니다.")
         
