@@ -965,12 +965,13 @@ def run_tab2_analysis():
                         pos.append("top right")
                 return pos
 
-            # 기온선 위치: 평균기온선의 중심을 '가장 짧은 막대의 세로 중앙'에 맞춤
-            # (→ 모든 막대의 몸통 안쪽, 막대 높이의 중간대). 최저기온선은 그 아래에 배치.
-            bar_top_min = float((cum_df["누적공급량(GJ)"] / y1_max).min())
-            avg_half = 0.075 if show_min else min(0.16, max(0.08, 0.5 * bar_top_min - 0.08))
+            # 기온선 위치: 평균기온선의 중심을 '전체 막대 높이의 중앙'(막대 높이 평균의 절반)에 맞추고,
+            # 오르내림 폭은 좁게 잡아 모든 연도의 점이 막대 중간대에 들어오게 함. 최저기온선은 그 아래에 배치.
+            bar_fracs = cum_df["누적공급량(GJ)"] / y1_max
+            bar_top_min = float(bar_fracs.min())
+            avg_half = 0.06 if show_min else 0.08          # 평균기온선 위아래 반폭(축 높이 대비)
             mid_floor = 0.26 if show_min else 0.16
-            mid = max(mid_floor, min(0.5 * bar_top_min, bar_top_min - 0.07 - avg_half))
+            mid = max(mid_floor, min(0.5 * float(bar_fracs.mean()), bar_top_min - 0.07 - avg_half))
             avg_band = (mid - avg_half, mid + avg_half)
             if show_min:
                 min_band = (0.05, avg_band[0] - 0.085)  # 평균기온선 아래, 라벨이 겹치지 않도록 간격 확보
@@ -994,7 +995,7 @@ def run_tab2_analysis():
                 else:
                     bar_top_max = float(cum_df["누적공급량(GJ)"].max()) / y1_max
                     hh_lo = bar_top_max + 0.08
-                    hh_hi = min(0.94, hh_lo + 0.065)  # 상승 폭을 작게 잡아 완만한 기울기로 표현
+                    hh_hi = min(0.94, hh_lo + 0.0455)  # 상승 폭(기존 0.065)을 30% 줄여 더 완만한 기울기로 표현
                     hh_range = band_range(hh_vals, hh_lo, hh_hi, 1.0)
 
             # 그래프는 폭을 넓히고(약 70%), 표는 그래프 바로 아래에 배치
