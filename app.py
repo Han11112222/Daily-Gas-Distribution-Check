@@ -810,7 +810,7 @@ def run_tab2_analysis():
         st.markdown(f"### 📈 {sel_month}월 일별 패턴 비교")
         cand_years = sorted(df_all["연"].unique().tolist())
         past_candidates = [y for y in cand_years if y < sel_year]
-        default_years = past_candidates[-2:] if len(past_candidates) >= 2 else past_candidates
+        default_years = past_candidates[-5:]  # 기본: 최근 5개 과거 연도
         past_years = st.multiselect("과거 연도 선택", options=past_candidates, default=default_years, key=f"{key_prefix}past_years")
         fig1 = go.Figure()
         if plan_curve_x:
@@ -897,8 +897,8 @@ def run_tab2_analysis():
             if show_min and cum_df["최저기온(℃)"].isna().all():
                 st.warning("최저기온 데이터를 가져오지 못했습니다. (구글시트 '최저' 열과 기상청 API 모두 값이 없음)")
 
-            # 팔레트: 과거=슬레이트 그레이, 기준연도=딥 블루, 평균기온=앰버, 최저기온=틸, 가정용 청구전수=스카이 블루
-            C_PAST, C_SEL, C_AVG, C_MIN, C_TXT = "#94A3B8", "#1E40AF", "#F08C00", "#0F9D7A", "#475569"
+            # 팔레트: 과거=라이트 그레이(#BEBEBE), 기준연도=블루(#005AC8), 평균기온=앰버, 최저기온=틸, 가정용 청구전수=스카이 블루
+            C_PAST, C_SEL, C_AVG, C_MIN, C_TXT = "#BEBEBE", "#005AC8", "#F08C00", "#0F9D7A", "#475569"
             C_AVG_TXT, C_MIN_TXT = "#B45309", "#047857"          # 기온 라벨 글자색(회색 막대 위)
             C_AVG_TXT_SEL, C_MIN_TXT_SEL = "#FDE68A", "#6EE7B7"  # 기준연도(진한 파랑 막대) 위에서는 밝은 글자색
             C_HH, C_HH_TXT = "#0EA5E9", "#0369A1"
