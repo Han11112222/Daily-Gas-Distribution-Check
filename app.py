@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+import re
 import matplotlib as mpl
 import plotly.express as px
 import plotly.graph_objects as go
@@ -285,6 +286,294 @@ def load_temperature_sheet():
         return df[["일자", "연도", "월", "일", "평균기온(℃)", "최저기온(℃)"]]
     except Exception:
         return None
+
+
+# ─────────────────────────────────────────────────────────
+# [공통 함수 4] 시간대별 기온 (기상청 ASOS 시간자료: OBS_ASOS*.csv)
+#  - 파일명 뒤의 숫자(다운로드 시각)는 매번 바뀌므로 'OBS_ASOS'로 시작하는 csv를 모두 찾아 사용
+#  - 파일이 여러 개면 합쳐서 쓰고, 같은 시각이 겹치면 가장 최근에 받은 파일 값을 사용
+#  - 시각 기준: 기상청 관행대로 '24시 = 다음날 00:00' (하루 = 1시 ~ 24시)
+# ─────────────────────────────────────────────────────────
+def _obs_asos_files() -> List[Path]:
+    """app.py와 같은 폴더의 OBS_ASOS*.csv를 오래된 순 → 최신 순으로 반환"""
+    base = Path(__file__).parent
+    files = [
+        p for p in base.iterdir()
+        if p.is_file() and p.suffix.lower() == ".csv" and p.name.upper().startswith("OBS_ASOS")
+    ]
+
+    def _key(p):
+        nums = re.findall(r"\d{8,14}", p.stem)  # 파일명 속 다운로드 시각(예: 20261030083256)
+        return (nums[-1].ljust(14, "0") if nums else "", p.stat().st_mtime)
+
+    return sorted(files, key=_key)
+
+
+def _obs_signature():
+    """파일 목록/수정시각이 바뀌면 캐시를 새로 만들기 위한 키"""
+    return tuple((p.name, p.stat().st_mtime) for p in _obs_asos_files())
+
+
+def _read_obs_csv(path: Path) -> Optional[pd.DataFrame]:
+    for enc in ("cp949", "utf-8-sig", "euc-kr"):
+        try:
+            raw = pd.read_csv(path, encoding=enc)
+        except Exception:
+            continue
+        raw.columns = [str(c).strip() for c in raw.columns]
+        col_dt = next((c for c in raw.columns if "일시" in c), None)
+        col_t = next((c for c in raw.columns
+                      if "기온" in c and "QC" not in c.upper() and "플래그" not in c), None)
+        if col_dt is None or col_t is None:
+            continue  # 인코딩이 안 맞아 열 이름이 깨졌으면 다음 인코딩 시도
+        out = pd.DataFrame({
+            "dt": pd.to_datetime(raw[col_dt], errors="coerce"),
+            "temp": pd.to_numeric(raw[col_t], errors="coerce"),
+        })
+        col_stn = next((c for c in raw.columns if c == "지점"), None)
+        if col_stn is not None and (pd.to_numeric(raw[col_stn], errors="coerce") == 143).any():
+            out = out[pd.to_numeric(raw[col_stn], errors="coerce").values == 143]  # 대구만
+        return out.dropna(subset=["dt", "temp"])
+    return None
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def load_obs_hourly(signature):
+    """OBS_ASOS*.csv 전부를 합쳐 (dt, 일자, 시, temp) 형태로 반환. 없으면 None"""
+    frames = [f for f in (_read_obs_csv(p) for p in _obs_asos_files()) if f is not None and not f.empty]
+    if not frames:
+        return None
+    df = pd.concat(frames, ignore_index=True)           # 오래된 파일 → 최신 파일 순
+    df = df.drop_duplicates("dt", keep="last").sort_values("dt")
+    df["일자"] = (df["dt"] - pd.Timedelta(minutes=1)).dt.normalize()   # 00:00 → 전날 24시
+    df["시"] = df["dt"].dt.hour.replace(0, 24)
+    return df[["dt", "일자", "시", "temp"]].reset_index(drop=True)
+
+
+def _longest_run(mask):
+    """True가 가장 길게 이어진 구간 (길이, 시작 index, 끝 index)"""
+    best, best_end, cur = 0, -1, 0
+    for i, v in enumerate(mask):
+        cur = cur + 1 if v else 0
+        if cur > best:
+            best, best_end = cur, i
+    return best, (best_end - best + 1 if best else -1), best_end
+
+
+def hourly_day_stats(day_df: pd.DataFrame, tol: float) -> dict:
+    """하루(24개 시각) 데이터에서 최저/최고, '최저기온+tol℃ 이내' 시간 수와 최장 연속시간 계산"""
+    d = day_df.sort_values("시")
+    h = d["시"].to_numpy()
+    t = d["temp"].to_numpy(dtype=float)
+    tmin, tmax = float(t.min()), float(t.max())
+    near = t <= tmin + tol + 1e-9
+    run, s, e = _longest_run(near)
+    m8 = t[h % 3 == 0]
+    return {
+        "hours": h, "temps": t, "tmin": tmin, "tmax": tmax,
+        "tmin_hour": int(h[t.argmin()]), "tmax_hour": int(h[t.argmax()]),
+        "near": near, "near_cnt": int(near.sum()),
+        "run": int(run),
+        "run_start": int(h[s]) if run else None,
+        "run_end": int(h[e]) if run else None,
+        # 구글시트 평균기온이 없을 때만 쓰는 대체값(기상청 방식: 3·6·…·24시 8개 평균)
+        "mean_kma": float(m8.mean()) if len(m8) else float(t.mean()),
+    }
+
+
+def build_hourly_compare_figure(days: list) -> go.Figure:
+    """days: [{'label','color','stats','avg','avg_src'}, ...] → 시간대별 기온 꺾은선 비교 그래프"""
+    fig = go.Figure()
+    # 평균선이 가까워도 라벨이 겹치지 않게: 평균이 높은 쪽은 선 위, 낮은 쪽은 선 아래에 표시
+    top_idx = max(range(len(days)), key=lambda k: (days[k]["avg"], -k))
+    for i, dd in enumerate(days):
+        s, c, lab = dd["stats"], dd["color"], dd["label"]
+        # 최저기온 근처가 가장 길게 이어진 구간을 옅게 음영 처리
+        if s["run"] > 0:
+            fig.add_vrect(x0=s["run_start"] - 0.5, x1=s["run_end"] + 0.5,
+                          fillcolor=c, opacity=0.12, line_width=0, layer="below")
+        fig.add_trace(go.Scatter(
+            x=s["hours"], y=s["temps"], mode="lines+markers", name=f"{lab} 시간별 기온",
+            line=dict(color=c, width=3), marker=dict(size=6),
+            hovertemplate=f"{lab} %{{x}}시<br>🌡 %{{y:.1f}}℃<extra></extra>",
+        ))
+        near = s["near"]
+        fig.add_trace(go.Scatter(
+            x=s["hours"][near], y=s["temps"][near], mode="markers",
+            name=f"{lab} 최저+범위 이내 ({s['near_cnt']}시간)",
+            marker=dict(size=15, symbol="circle-open", color=c, line=dict(width=2.5)),
+            hoverinfo="skip",
+        ))
+        fig.add_hline(
+            y=dd["avg"], line_dash="dash", line_color=c, line_width=1.5,
+            annotation_text=f"{lab} 평균 {dd['avg']:.1f}℃",
+            annotation_position="top left" if i == top_idx else "bottom left",
+            annotation_font=dict(color=c, size=12),
+        )
+        fig.add_annotation(
+            x=s["tmin_hour"], y=s["tmin"], text=f"<b>최저 {s['tmin']:.1f}℃</b>",
+            showarrow=True, arrowcolor=c, ax=0, ay=34, font=dict(color=c, size=12),
+        )
+    fig.update_layout(
+        height=520, margin=dict(l=10, r=10, t=30, b=10),
+        xaxis=dict(title="시 (24시 = 다음날 00:00)", dtick=1, range=[0.3, 24.7]),
+        yaxis=dict(title="기온 (℃)", gridcolor="rgba(148,163,184,0.25)"),
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
+        hovermode="x unified",
+    )
+    return fig
+
+
+def build_hourly_continuous_figure(obs_m: pd.DataFrame, days: list, sheet_avg: dict) -> go.Figure:
+    """월초~현재까지 시간별 기온을 하나의 선으로 이어서 표시 (비교한 두 날짜는 음영)"""
+    fig = go.Figure()
+    for dd in days:
+        d0 = pd.Timestamp(dd["date"]).to_pydatetime()
+        d1 = (pd.Timestamp(dd["date"]) + pd.Timedelta(days=1)).to_pydatetime()
+        fig.add_vrect(x0=d0, x1=d1, fillcolor=dd["color"], opacity=0.14, line_width=0, layer="below")
+        fig.add_annotation(
+            x=d0 + timedelta(hours=12), y=1, yref="paper", yanchor="bottom", showarrow=False,
+            text=f"<b>{dd['label']}</b>", font=dict(color=dd["color"], size=12),
+        )
+    fig.add_trace(go.Scatter(
+        x=obs_m["dt"], y=obs_m["temp"], mode="lines", name="시간별 기온",
+        line=dict(color="#475569", width=2),
+        hovertemplate="%{x|%m/%d %H:%M}<br>🌡 %{y:.1f}℃<extra></extra>",
+    ))
+    # 일평균기온(구글시트)을 각 날짜 정오에 점으로 표시
+    d_first = obs_m["일자"].min()
+    d_last = obs_m["일자"].max()
+    xs, ys = [], []
+    for d, v in sorted(sheet_avg.items()):
+        if d_first <= d <= d_last:
+            xs.append((d + pd.Timedelta(hours=12)).to_pydatetime())
+            ys.append(float(v))
+    if xs:
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="lines+markers", name="일평균기온(구글시트)",
+            line=dict(color="#F08C00", width=2, dash="dot"),
+            marker=dict(size=7, color="#F08C00", line=dict(color="white", width=1.5)),
+            hovertemplate="%{x|%m/%d} 일평균<br>🌡 %{y:.1f}℃<extra></extra>",
+        ))
+    fig.update_layout(
+        height=480, margin=dict(l=10, r=10, t=30, b=10),
+        xaxis=dict(title="날짜", tickformat="%m/%d", dtick=86400000, tickangle=-45,
+                   range=[obs_m["dt"].min().to_pydatetime(), obs_m["dt"].max().to_pydatetime()]),
+        yaxis=dict(title="기온 (℃)", gridcolor="rgba(148,163,184,0.25)"),
+        legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="center", x=0.5),
+        hovermode="x unified",
+    )
+    return fig
+
+
+def hourly_temperature_section(key_prefix: str = "hourly_"):
+    """[탭2 최하단] '시간대별 기온 분석' 활성화 버튼
+    - 기본: 가장 최근 날짜 vs 전날(D-1) 시간대별 기온 비교
+    - 우측 '이어보기' 버튼: 해당 월 1일 ~ 현재까지 시간별 기온을 이어서 표시"""
+    show = st.toggle("🌡️ 시간대별 기온 분석", value=False, key=f"{key_prefix}toggle")
+    if not show:
+        return
+
+    obs = load_obs_hourly(_obs_signature())
+    if obs is None or obs.empty:
+        st.info("app.py와 같은 폴더에 `OBS_ASOS`로 시작하는 기상청 시간자료 CSV가 없습니다. "
+                "(파일명 뒤 숫자는 달라도 됩니다. 예: OBS_ASOS_TIM_20261030083256.csv)")
+        return
+
+    last_day = pd.Timestamp(obs["일자"].max())
+    prev_all = obs.loc[obs["일자"] < last_day, "일자"].unique()
+    if len(prev_all) == 0:
+        st.info("비교할 전날(D-1) 자료가 없습니다.")
+        return
+    prev_day = pd.Timestamp(max(prev_all))      # 보통 last_day - 1일, 자료가 비면 그 이전 가장 가까운 날
+
+    # 제목(좌) + 이어보기 버튼(우측)
+    h_title, h_cont = st.columns([4.5, 1.3])
+    with h_title:
+        st.markdown(f"### 🌡️ 시간대별 기온 분석 · {last_day:%m/%d} vs {prev_day:%m/%d}")
+    with h_cont:
+        cont = st.toggle("이어보기", value=False, key=f"{key_prefix}continue",
+                         help=f"{last_day.month}월 1일부터 현재까지 시간별 기온을 이어서 보여줍니다.")
+
+    files_txt = ", ".join(p.name for p in _obs_asos_files())
+    st.caption(f"시간자료 파일: {files_txt} · 최신 관측 {obs['dt'].max():%Y-%m-%d %H:%M}")
+    if prev_day != last_day - pd.Timedelta(days=1):
+        st.caption(f"※ {last_day - pd.Timedelta(days=1):%m/%d} 자료가 없어 가장 가까운 {prev_day:%m/%d}와 비교합니다.")
+
+    tol_col, _ = st.columns([2, 3])
+    with tol_col:
+        tol = st.slider("최저기온 허용 범위 (최저 +℃ 이내)", 0.5, 3.0, 1.0, 0.5, key=f"{key_prefix}tol")
+
+    # 평균기온은 구글시트(기상청 일평균) 값을 사용, 시트에 없으면 시간자료로 대체
+    ts = load_temperature_sheet()
+    sheet_avg = {}
+    if ts is not None and not ts.empty:
+        sheet_avg = ts.dropna(subset=["평균기온(℃)"]).drop_duplicates("일자", keep="last") \
+                      .set_index("일자")["평균기온(℃)"].to_dict()
+
+    palette = ["#D62728", "#1F77B4"]            # 최근일=빨강, D-1=파랑
+    days = []
+    for color, d_ts in zip(palette, [last_day, prev_day]):
+        stats = hourly_day_stats(obs[obs["일자"] == d_ts], tol)
+        if d_ts in sheet_avg:
+            avg, src = float(sheet_avg[d_ts]), "구글시트"
+        else:
+            avg, src = stats["mean_kma"], "시간자료 대체"
+        days.append({"label": d_ts.strftime("%m/%d"), "color": color, "stats": stats,
+                     "avg": avg, "avg_src": src, "date": d_ts.strftime("%Y-%m-%d"),
+                     "n": int(len(stats["hours"]))})
+
+    st.plotly_chart(build_hourly_compare_figure(days), use_container_width=True)
+
+    rows = []
+    for dd in days:
+        s = dd["stats"]
+        rows.append({
+            "날짜": dd["date"],
+            "평균기온(℃)": dd["avg"],
+            "최저기온(℃)": s["tmin"],
+            "최저 발생(시)": s["tmin_hour"],
+            f"최저+{tol:g}℃ 이내 시간(h)": s["near_cnt"],
+            "최장 연속(h)": s["run"],
+            "최고기온(℃)": s["tmax"],
+            "관측 시간 수": dd["n"],
+            "평균기온 출처": dd["avg_src"],
+        })
+    st.dataframe(
+        pd.DataFrame(rows).style.format({"평균기온(℃)": "{:.1f}", "최저기온(℃)": "{:.1f}", "최고기온(℃)": "{:.1f}"})
+          .set_properties(**{"text-align": "center"})
+          .set_table_styles([dict(selector="th", props=[("text-align", "center")])]),
+        use_container_width=True, hide_index=True,
+    )
+
+    a, b = days[0], days[1]
+    if a["n"] < 24 or b["n"] < 24:
+        done = a if a["n"] < 24 else b
+        st.caption(f"※ {done['label']}는 아직 진행 중({done['n']}시간 관측)이라 최저기온·지속시간은 현재까지 기준입니다.")
+    else:
+        na, nb = a["stats"]["near_cnt"], b["stats"]["near_cnt"]
+        if na == nb:
+            cmp_txt = f"두 날 모두 {na}시간으로 같습니다."
+        else:
+            longer, shorter = (a, b) if na > nb else (b, a)
+            cmp_txt = (f"**{longer['label']}** 이(가) {longer['stats']['near_cnt']}시간으로 "
+                       f"{shorter['label']}({shorter['stats']['near_cnt']}시간)보다 "
+                       f"{abs(na - nb)}시간 더 깁니다.")
+        st.info(
+            f"최저기온 +{tol:g}℃ 이내로 머문 시간: {cmp_txt} "
+            f"평균기온 {a['label']} {a['avg']:.1f}℃ vs {b['label']} {b['avg']:.1f}℃ "
+            f"({a['avg'] - b['avg']:+.1f}℃)."
+        )
+    st.caption("※ 점선=일평균기온(구글시트), 빈 원=최저기온+허용범위 이내 시각, 음영=그중 가장 길게 이어진 구간 · 24시=다음날 00:00")
+
+    # ── 이어보기: 해당 월 1일 ~ 현재 ──
+    if cont:
+        month_start = last_day.replace(day=1)
+        obs_m = obs[obs["dt"] >= month_start].copy()
+        st.markdown(f"#### 📈 {last_day.month}월 1일 ~ 현재 시간별 기온 (이어보기)")
+        st.plotly_chart(build_hourly_continuous_figure(obs_m, days, sheet_avg), use_container_width=True)
+        st.caption(f"{obs_m['dt'].min():%m/%d %H:%M} ~ {obs_m['dt'].max():%m/%d %H:%M} · "
+                   f"음영=위에서 비교한 두 날짜 · 주황 점선=일평균기온(구글시트)")
 
 
 # ==============================================================================
@@ -1242,6 +1531,9 @@ def run_tab2_analysis():
         st.markdown("---")
         temperature_matrix(day_df, sel_month, key_prefix + "temp_")
         temperature_supply_band_section(day_df, sel_month, key_prefix + "band_")
+
+        st.markdown("---")
+        hourly_temperature_section(key_prefix + "hourly_")
 
     st.sidebar.header("📂 [분석] 데이터 파일")
     DEFAULT_SUPPLY_XLSX = "공급량(계획_실적).xlsx"
