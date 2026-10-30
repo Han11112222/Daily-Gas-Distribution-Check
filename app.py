@@ -1499,8 +1499,8 @@ def run_tab2_analysis():
             if sup_y and tmp_y:
                 s_lo, s_hi = min(sup_y), max(sup_y)
                 t_lo, t_hi = min(tmp_y), max(tmp_y)
-                s_w = max((s_hi - s_lo) / 0.65, 1.0); s_rng0 = s_lo - 0.33 * s_w          # 공급량: 위쪽 약 65%
-                t_w = max((t_hi - t_lo) / 0.25, 1.0); t_rng0 = t_lo - 0.02 * t_w          # 기온: 바로 아래 약 25%
+                s_w = max((s_hi - s_lo) / 0.56, 1.0); s_rng0 = s_lo - 0.42 * s_w          # 공급량: 위쪽 약 56%
+                t_w = max((t_hi - t_lo) / 0.30, 1.0); t_rng0 = t_lo - 0.03 * t_w          # 기온: 아래쪽 약 30%
                 for t in fig1.data:
                     if t.name == "_base":
                         t.y = [s_lo - 0.05 * (s_hi - s_lo)] * len(t.y)
@@ -1510,12 +1510,12 @@ def run_tab2_analysis():
                 t_step = 2 if (t_hi - t_lo) <= 14 else 5
                 t_ticks = list(range(int(math.floor(t_lo / t_step)) * t_step, int(math.ceil(t_hi)) + 1, t_step))
                 fig1.update_layout(
-                    height=740,
+                    height=620,
                     yaxis=dict(range=[s_rng0, s_rng0 + s_w], tickmode="array", tickvals=s_ticks),
                     yaxis2=dict(title=dict(text="기온 (℃)", font=dict(color=_ax, size=12)), overlaying="y", side="right",
                                 range=[t_rng0, t_rng0 + t_w], tickmode="array", tickvals=t_ticks, showgrid=False,
                                 showline=False, zeroline=False, automargin=True, tickfont=dict(color=_ax, size=11)))
-                fig1.add_hline(y=s_rng0 + 0.29 * s_w, line_dash="dot", line_color="rgba(100,116,139,0.35)", line_width=1)  # 공급량/기온 구분선
+                fig1.add_hline(y=s_rng0 + 0.36 * s_w, line_dash="dot", line_color="rgba(100,116,139,0.35)", line_width=1)  # 공급량/기온 구분선
         st.plotly_chart(fig1, use_container_width=True)
 
         # ─────────────────────────────────────────────
