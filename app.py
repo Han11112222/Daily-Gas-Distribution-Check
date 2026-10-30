@@ -1408,21 +1408,92 @@ def run_tab2_analysis():
         past_candidates = [y for y in cand_years if y < sel_year]
         default_years = past_candidates[-5:]  # 기본: 최근 5개 과거 연도
         past_years = st.multiselect("과거 연도 선택", options=past_candidates, default=default_years, key=f"{key_prefix}past_years")
+        # 그래프 우측 상단: 당해연도 기온 표시 버튼 (우측 축 ℃)
+        try:
+            _pt, _p1, _p2 = st.columns([5, 1.1, 1.1], vertical_alignment="center")
+        except TypeError:
+            _pt, _p1, _p2 = st.columns([5, 1.1, 1.1])
+        with _pt:
+            st.markdown(f"**{sel_year}년 {sel_month}월 일별 공급량 패턴**")
+        with _p1:
+            show_tavg = st.toggle("평균기온", value=False, key=f"{key_prefix}pat_tavg",
+                                  help=f"{sel_year}년 {sel_month}월 일평균기온을 우측 축(℃)에 표시합니다.")
+        with _p2:
+            show_tmin = st.toggle("최저기온", value=False, key=f"{key_prefix}pat_tmin",
+                                  help=f"{sel_year}년 {sel_month}월 일 최저기온을 우측 축(℃)에 표시합니다.")
+
+        _C_MAIN, _C_PLAN, _C_PREV = "#1A73E8", "#F5A800", "#8F959C"
+        _C_TAVG, _C_TMIN = "#34A853", "#A142F4"
+        _pastel = ["#AFC8EE", "#C6BEEB", "#EDB9C6", "#B7D9BE", "#EBD49B", "#B5D3DE", "#D9C3B0"]
+
+        def _rgba_p(h, a):
+            h = h.lstrip("#"); return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{a})"
+
         fig1 = go.Figure()
-        if plan_curve_x:
-            fig1.add_scatter(x=plan_curve_x, y=plan_curve_y, mode="lines", name=f"{sel_year}년 {sel_month}월 계획 (사업계획)", line=dict(color="#FF4B4B", width=3, dash="dot"), hovertemplate="%{y:,.0f} GJ<extra></extra>")
-        pastel_colors = ["#93C5FD", "#A5B4FC", "#C4B5FD", "#FDA4AF", "#FCA5A5", "#FCD34D", "#86EFAC"]
         prev_year = sel_year - 1
+        # 과거 연도: 연한 얇은 곡선, 전년도는 회색 굵은 곡선
         for idx, y in enumerate(past_years):
             sub = df_all[(df_all["연"] == y) & (df_all["월"] == sel_month)].copy()
             if sub.empty: continue
-            line_color = "#3B82F6" if y == prev_year else pastel_colors[idx % len(pastel_colors)]
-            line_width = 3 if y == prev_year else 1.5
-            op_mode = "lines+markers" if y == prev_year else "lines"
-            fig1.add_scatter(x=sub["일"], y=sub[act_col] / 1000.0, mode=op_mode, name=f"{y}년 {sel_month}월 실적", line=dict(color=line_color, width=line_width), hovertemplate="%{y:,.0f} GJ<extra></extra>")
-        if not this_df.empty: 
-            fig1.add_scatter(x=this_df["일"], y=this_df[act_col] / 1000.0, mode="lines+markers", name=f"{sel_year}년 {sel_month}월 실적", line=dict(color="black", width=4), hovertemplate="%{y:,.0f} GJ<extra></extra>")
-        fig1.update_layout(title=f"{sel_year}년 {sel_month}월 일별 공급량 패턴", xaxis_title="일", yaxis_title="공급량 (GJ)", margin=dict(l=10, r=10, t=50, b=10))
+            is_prev = (y == prev_year)
+            fig1.add_scatter(
+                x=sub["일"], y=sub[act_col] / 1000.0, mode="lines", name=f"{y}년 실적",
+                line=dict(color=_C_PREV if is_prev else _pastel[idx % len(_pastel)],
+                          width=2.4 if is_prev else 1.6, shape="spline", smoothing=0.6),
+                hovertemplate="%{y:,.0f} GJ<extra>" + f"{y}년</extra>")
+        if plan_curve_x:
+            fig1.add_scatter(
+                x=plan_curve_x, y=plan_curve_y, mode="lines", name=f"{sel_year}년 계획",
+                line=dict(color=_C_PLAN, width=2.6, dash="dot", shape="spline", smoothing=0.6),
+                hovertemplate="%{y:,.0f} GJ<extra>계획</extra>")
+        if not this_df.empty:
+            ymin_fill = float(this_df[act_col].min() / 1000.0) * 0.5
+            fig1.add_scatter(x=this_df["일"], y=[ymin_fill] * len(this_df), mode="lines",
+                             line=dict(width=0), showlegend=False, hoverinfo="skip")
+            fig1.add_scatter(
+                x=this_df["일"], y=this_df[act_col] / 1000.0, mode="lines+markers", name=f"{sel_year}년 실적",
+                line=dict(color=_C_MAIN, width=3.6, shape="spline", smoothing=0.6),
+                marker=dict(size=8, color=_C_MAIN, line=dict(color="white", width=1.5)),
+                fill="tonexty", fillcolor=_rgba_p(_C_MAIN, 0.08),
+                hovertemplate="%{y:,.0f} GJ<extra>" + f"{sel_year}년 실적</extra>")
+
+        # 당해연도 기온 (우측 축) — 구글시트의 평균기온/최저기온
+        _t_all = [v for v in (show_tavg, show_tmin) if v]
+        if _t_all:
+            ts_ = load_temperature_sheet()
+            tcur = None
+            if ts_ is not None and not ts_.empty:
+                tcur = ts_[(ts_["연도"] == sel_year) & (ts_["월"] == sel_month)].sort_values("일")
+                if last_valid_date is not pd.NaT and pd.notna(last_valid_date):
+                    tcur = tcur[tcur["일자"] <= last_valid_date]
+            if show_tavg:
+                if tcur is not None and tcur["평균기온(℃)"].notna().any():
+                    xa, ya = tcur["일"], tcur["평균기온(℃)"]
+                else:                                   # 시트에 없으면 실적 데이터의 평균기온으로 대체
+                    xa, ya = this_df["일"], this_df["평균기온(℃)"] if "평균기온(℃)" in this_df.columns else []
+                fig1.add_scatter(x=xa, y=ya, mode="lines+markers", name=f"{sel_year}년 평균기온(℃)", yaxis="y2",
+                                 line=dict(color=_C_TAVG, width=2.4, dash="dot", shape="spline", smoothing=0.8),
+                                 marker=dict(size=5, color=_C_TAVG), hovertemplate="%{y:.1f} ℃<extra>평균기온</extra>")
+            if show_tmin and tcur is not None and tcur["최저기온(℃)"].notna().any():
+                fig1.add_scatter(x=tcur["일"], y=tcur["최저기온(℃)"], mode="lines+markers", name=f"{sel_year}년 최저기온(℃)",
+                                 yaxis="y2", line=dict(color=_C_TMIN, width=2.4, dash="dot", shape="spline", smoothing=0.8),
+                                 marker=dict(size=5, color=_C_TMIN), hovertemplate="%{y:.1f} ℃<extra>최저기온</extra>")
+            elif show_tmin:
+                st.caption("※ 구글시트에서 최저기온을 읽지 못했습니다.")
+
+        _ax = "#80868B"; _gr = "rgba(148,163,184,0.20)"
+        fig1.update_layout(
+            height=470, margin=dict(l=10, r=10, t=50, b=10), plot_bgcolor="white", hovermode="x unified",
+            xaxis=dict(title=dict(text="일", font=dict(color=_ax, size=12)), tickfont=dict(color=_ax, size=11),
+                       showgrid=False, showline=False, zeroline=False, automargin=True),
+            yaxis=dict(automargin=True, title=dict(text="공급량 (GJ)", font=dict(color=_ax, size=12)), tickfont=dict(color=_ax, size=11),
+                       gridcolor=_gr, showline=False, zeroline=False, tickformat=","),
+            legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="right", x=1, font=dict(size=12)),
+        )
+        if _t_all:
+            fig1.update_layout(yaxis2=dict(title=dict(text="기온 (℃)", font=dict(color=_ax, size=12)),
+                                           overlaying="y", side="right", automargin=True, showgrid=False, showline=False, zeroline=False,
+                                           tickfont=dict(color=_ax, size=11)))
         st.plotly_chart(fig1, use_container_width=True)
 
         # ─────────────────────────────────────────────
