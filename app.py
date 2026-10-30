@@ -454,35 +454,74 @@ def hourly_day_stats(day_df: pd.DataFrame, tol: float = HOURLY_LOW_TOL) -> dict:
     }
 
 
-# 최신일=빨강, D-1=파랑, D-2=초록, D-3=보라, D-4=주황, D-5=청록, D-6=갈색
-_DAY_COLORS = ["#D62728", "#1F77B4", "#2CA02C", "#9467BD", "#FF7F0E", "#17BECF", "#8C564B"]
+# 최신일=파랑(굵은 실선+면), D-1=앰버, D-2=회색(얇은 점선), 그 이후는 차분한 보조색
+_DAY_COLORS = ["#1A73E8", "#F5A800", "#8F959C", "#34A853", "#A142F4", "#E8710A", "#00ACC1"]
+_AXIS_TXT = "#80868B"
+_GRID = "rgba(148,163,184,0.20)"
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{alpha})"
 
 
 def build_hourly_compare_figure(days: list) -> go.Figure:
-    """days: 최신일 → 과거 순. 하루 1~24시 축에 날짜별 시간대별 기온을 겹쳐 그린다."""
+    """days: 최신일 → 과거 순. 하루 1~24시 축에 날짜별 시간대별 기온을 겹쳐 그린다.
+    스타일: 최신일은 굵은 파란 곡선 + 아래 옅은 면, 과거일은 얇은 점선."""
     fig = go.Figure()
+    all_t = [v for dd in days for v in dd["stats"]["temps"]]
+    t_lo = min(all_t + [dd["avg"] for dd in days])
+    t_hi = max(all_t + [dd["avg"] for dd in days])
+    span = max(t_hi - t_lo, 1.0)
+    y_lo, y_hi = t_lo - 0.12 * span, t_hi + 0.24 * span      # 위쪽은 이름표 자리 확보
     label_min = len(days) <= 3          # 날짜가 많으면 글자 겹침을 막기 위해 최저 표시는 마름모만
-    # 최신일의 최저기온 지속 구간을 그래프 뒤쪽에 음영으로 표시
-    r = days[0]["stats"]
-    fig.add_vrect(x0=r["run_start"] - 0.5, x1=r["run_end"] + 0.5, fillcolor=days[0]["color"],
-                  opacity=0.15, line_width=0, layer="below")
-    left_side = (r["run_start"] + r["run_end"]) / 2 < 12
-    fig.add_annotation(
-        x=(r["run_start"] - 0.5) if left_side else (r["run_end"] + 0.5), y=1, yref="paper",
-        xanchor="left" if left_side else "right", yanchor="top", showarrow=False,
-        text=(f"<b>{days[0]['label']} 최저 {r['tmin']:.1f}℃ 지속<br>"
-              f"{r['run_start']}~{r['run_end']}시 ({r['run_cnt']}시간)</b>"),
-        font=dict(color=days[0]["color"], size=12), align="left" if left_side else "right",
-    )
-    for i, dd in enumerate(days):
+
+    # 날짜별 최저기온 지속 구간(최저기온 +1℃ 이내로 이어진 구간)을 그래프 뒤쪽에 음영 + 이름표로 표시
+    shade_op = 0.13 if len(days) <= 2 else (0.09 if len(days) <= 4 else 0.06)
+    rows_used = []                    # 이름표가 가로로 겹치면 다음 줄로 내려서 배치
+    for dd in days:
+        r, c = dd["stats"], dd["color"]
+        fig.add_vrect(x0=r["run_start"] - 0.5, x1=r["run_end"] + 0.5, fillcolor=c,
+                      opacity=shade_op, line_width=0, layer="below")
+        left_side = (r["run_start"] + r["run_end"]) / 2 < 12
+        x_anchor = (r["run_start"] - 0.5) if left_side else (r["run_end"] + 0.5)
+        span_x = (x_anchor, x_anchor + 3.2) if left_side else (x_anchor - 3.2, x_anchor)
+        row = 0
+        while any(rw == row and not (span_x[1] <= s0 or span_x[0] >= s1) for rw, s0, s1 in rows_used):
+            row += 1
+        rows_used.append((row, span_x[0], span_x[1]))
+        fig.add_annotation(
+            x=x_anchor, y=1 - row * 0.1, yref="paper",
+            xanchor="left" if left_side else "right", yanchor="top", showarrow=False,
+            text=(f"<b>{dd['label']} 최저 {r['tmin']:.1f}℃ 지속<br>"
+                  f"{r['run_start']}~{r['run_end']}시 ({r['run_cnt']}시간)</b>"),
+            font=dict(color=c, size=12), align="left" if left_side else "right",
+        )
+
+    def _line(i, dd, fill):
         s, c = dd["stats"], dd["color"]
+        main = (i == 0)
         fig.add_trace(go.Scatter(
             x=s["hours"], y=s["temps"], mode="lines+markers",
-            name=f"{dd['label']} {dd['tag']} · 평균 {dd['avg']:.1f}℃",
-            line=dict(color=c, width=3.5 if i == 0 else 2.2),
-            marker=dict(size=6 if i == 0 else 5),
+            name=f"{dd['label']} {dd['tag']} · 평균 {dd['avg']:.1f}℃", legendrank=i + 1,
+            line=dict(color=c, width=3.6 if main else 2.0, dash="solid" if main else "dot",
+                      shape="spline", smoothing=1.0),
+            marker=dict(size=9 if main else 4, color=c,
+                        line=dict(color="white", width=2 if main else 0)),
+            fill="tonexty" if fill else None, fillcolor=_rgba(c, 0.10) if fill else None,
             hovertemplate=f"{dd['label']} {dd['tag']} %{{x}}시<br>🌡 %{{y:.1f}}℃<extra></extra>",
         ))
+
+    # 과거일(점선)을 먼저 그리고, 면 채움 기준선 → 최신일(굵은 파랑)을 맨 위에 그린다
+    for i in range(len(days) - 1, 0, -1):
+        _line(i, days[i], fill=False)
+    h0 = days[0]["stats"]["hours"]
+    fig.add_trace(go.Scatter(x=h0, y=[y_lo] * len(h0), mode="lines", line=dict(width=0),
+                             showlegend=False, hoverinfo="skip"))
+    _line(0, days[0], fill=True)
+
+    for dd in days:                    # 그날의 최저기온 마름모
+        s, c = dd["stats"], dd["color"]
         fig.add_trace(go.Scatter(
             x=[s["tmin_hour"]], y=[s["tmin"]],
             mode="markers+text" if label_min else "markers",
@@ -492,9 +531,9 @@ def build_hourly_compare_figure(days: list) -> go.Figure:
             showlegend=False, cliponaxis=False,
             hovertemplate=f"{dd['label']} 최저 %{{y:.1f}}℃ (%{{x}}시)<extra></extra>",
         ))
-    # 맨 왼쪽(x=0 '평균' 칸)에 날짜별 일평균기온(구글시트)을 표시
-    all_t = [v for dd in days for v in dd["stats"]["temps"]]
-    gap = (max(all_t) - min(all_t)) * 0.06           # 평균값이 가까워도 라벨이 겹치지 않도록 최소 간격
+
+    # 맨 왼쪽(x=0 '평균' 칸)에 날짜별 일평균기온(구글시트): 점선 수평선 + 왼쪽 이름표
+    gap = span * 0.06                                  # 평균값이 가까워도 라벨이 겹치지 않도록 최소 간격
     avgs = [dd["avg"] for dd in days]
     order = sorted(range(len(days)), key=lambda k: avgs[k])
     pos = [avgs[k] for k in order]
@@ -506,12 +545,12 @@ def build_hourly_compare_figure(days: list) -> go.Figure:
         c = dd["color"]
         fig.add_trace(go.Scatter(                      # 평균기온 수평선(점선)
             x=[0, 24.7], y=[dd["avg"], dd["avg"]], mode="lines",
-            line=dict(color=c, width=1.6, dash="dash"), opacity=0.8,
+            line=dict(color=c, width=1.4, dash="dash"), opacity=0.6,
             showlegend=False, hoverinfo="skip",
         ))
         fig.add_trace(go.Scatter(
             x=[0], y=[dd["avg"]], mode="markers",
-            marker=dict(size=13, symbol="square", color=c, line=dict(color="white", width=1.5)),
+            marker=dict(size=12, symbol="square", color=c, line=dict(color="white", width=1.5)),
             showlegend=False, hovertemplate=f"{dd['label']} 평균 %{{y:.1f}}℃<extra></extra>",
         ))
         fig.add_trace(go.Scatter(
@@ -519,40 +558,53 @@ def build_hourly_compare_figure(days: list) -> go.Figure:
             textposition="middle left", textfont=dict(color=c, size=12),
             showlegend=False, hoverinfo="skip", cliponaxis=False,
         ))
-    fig.add_vline(x=0.4, line_dash="dot", line_color="rgba(100,116,139,0.5)", line_width=1)
+    fig.add_vline(x=0.4, line_dash="dot", line_color="rgba(100,116,139,0.35)", line_width=1)
+
     fig.update_layout(
-        height=520, margin=dict(l=10, r=10, t=30, b=10),
-        xaxis=dict(title="시 (24시 = 다음날 00:00)", dtick=1, range=[-3.2, 24.7], tickmode="array",
-                   tickvals=list(range(0, 25)), ticktext=["평균"] + [str(h) for h in range(1, 25)]),
-        yaxis=dict(title="기온 (℃)", gridcolor="rgba(148,163,184,0.25)"),
-        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
+        height=520, margin=dict(l=10, r=10, t=50, b=10), plot_bgcolor="white",
+        xaxis=dict(title=dict(text="시 (24시 = 다음날 00:00)", font=dict(color=_AXIS_TXT, size=12)),
+                   range=[-3.2, 24.7], tickmode="array",
+                   tickvals=list(range(0, 25)), ticktext=["평균"] + [str(h) for h in range(1, 25)],
+                   showgrid=False, showline=False, zeroline=False, tickfont=dict(color=_AXIS_TXT, size=11)),
+        yaxis=dict(title=dict(text="기온 (℃)", font=dict(color=_AXIS_TXT, size=12)), range=[y_lo, y_hi],
+                   gridcolor=_GRID, showline=False, zeroline=False, tickfont=dict(color=_AXIS_TXT, size=11)),
+        legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="right", x=1, font=dict(size=12)),
         hovermode="x unified",
     )
     return fig
 
 
 def build_hourly_continuous_figure(obs_m: pd.DataFrame, days: list, sheet_avg: dict) -> go.Figure:
-    """월초~현재까지 시간별 기온을 가로로 하나의 선으로 이어서 표시 (선택한 날짜는 색 음영)"""
+    """월초~현재까지 시간별 기온을 가로로 하나의 곡선으로 이어서 표시 (선택한 날짜는 색 음영)"""
     fig = go.Figure()
     for dd in days:
         d0 = pd.Timestamp(dd["date"])
         fig.add_vrect(x0=d0.to_pydatetime(), x1=(d0 + pd.Timedelta(days=1)).to_pydatetime(),
-                      fillcolor=dd["color"], opacity=0.14, line_width=0, layer="below")
+                      fillcolor=dd["color"], opacity=0.10, line_width=0, layer="below")
         fig.add_annotation(
             x=(d0 + pd.Timedelta(hours=12)).to_pydatetime(), y=1, yref="paper", yanchor="bottom",
             showarrow=False, text=f"<b>{dd['label']}</b>", font=dict(color=dd["color"], size=11),
         )
-    r = days[0]["stats"]            # 최신일의 최저기온 지속 구간은 더 진하게
-    d_new = pd.Timestamp(days[0]["date"])
-    fig.add_vrect(x0=(d_new + pd.Timedelta(hours=r["run_start"] - 0.5)).to_pydatetime(),
-                  x1=(d_new + pd.Timedelta(hours=r["run_end"] + 0.5)).to_pydatetime(),
-                  fillcolor=days[0]["color"], opacity=0.28, line_width=0, layer="below")
+    for dd in days:                 # 날짜별 최저기온 지속 구간은 더 진하게
+        r = dd["stats"]
+        d_run = pd.Timestamp(dd["date"])
+        fig.add_vrect(x0=(d_run + pd.Timedelta(hours=r["run_start"] - 0.5)).to_pydatetime(),
+                      x1=(d_run + pd.Timedelta(hours=r["run_end"] + 0.5)).to_pydatetime(),
+                      fillcolor=dd["color"], opacity=0.25, line_width=0, layer="below")
+
+    t_lo, t_hi = float(obs_m["temp"].min()), float(obs_m["temp"].max())
+    span = max(t_hi - t_lo, 1.0)
+    y_lo, y_hi = t_lo - 0.08 * span, t_hi + 0.10 * span
+    main_c = _DAY_COLORS[0]
+    fig.add_trace(go.Scatter(x=obs_m["dt"], y=[y_lo] * len(obs_m), mode="lines", line=dict(width=0),
+                             showlegend=False, hoverinfo="skip"))       # 면 채움 기준선
     fig.add_trace(go.Scatter(
         x=obs_m["dt"], y=obs_m["temp"], mode="lines", name="시간별 기온",
-        line=dict(color="#475569", width=2),
+        line=dict(color=main_c, width=2.6, shape="spline", smoothing=0.6),
+        fill="tonexty", fillcolor=_rgba(main_c, 0.10),
         hovertemplate="%{x|%m/%d %H:%M}<br>🌡 %{y:.1f}℃<extra></extra>",
     ))
-    # 일평균기온(구글시트)을 각 날짜 정오에 점으로 표시
+    # 일평균기온(구글시트)을 각 날짜 정오에 앰버 점선으로 표시
     d_first, d_last = obs_m["일자"].min(), obs_m["일자"].max()
     xs, ys = [], []
     for d, v in sorted(sheet_avg.items()):
@@ -562,16 +614,18 @@ def build_hourly_continuous_figure(obs_m: pd.DataFrame, days: list, sheet_avg: d
     if xs:
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="lines+markers", name="일평균기온(구글시트)",
-            line=dict(color="#F08C00", width=2, dash="dot"),
-            marker=dict(size=7, color="#F08C00", line=dict(color="white", width=1.5)),
+            line=dict(color=_DAY_COLORS[1], width=2, dash="dot", shape="spline", smoothing=0.8),
+            marker=dict(size=5, color=_DAY_COLORS[1]),
             hovertemplate="%{x|%m/%d} 일평균<br>🌡 %{y:.1f}℃<extra></extra>",
         ))
     fig.update_layout(
-        height=520, margin=dict(l=10, r=10, t=30, b=10),
-        xaxis=dict(title="날짜", tickformat="%m/%d", dtick=86400000, tickangle=-45,
+        height=520, margin=dict(l=10, r=10, t=50, b=10), plot_bgcolor="white",
+        xaxis=dict(title=None, tickformat="%m/%d", dtick=86400000, tickangle=-45,
+                   showgrid=False, showline=False, tickfont=dict(color=_AXIS_TXT, size=11),
                    range=[obs_m["dt"].min().to_pydatetime(), obs_m["dt"].max().to_pydatetime()]),
-        yaxis=dict(title="기온 (℃)", gridcolor="rgba(148,163,184,0.25)"),
-        legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="center", x=0.5),
+        yaxis=dict(title=dict(text="기온 (℃)", font=dict(color=_AXIS_TXT, size=12)), range=[y_lo, y_hi],
+                   gridcolor=_GRID, showline=False, zeroline=False, tickfont=dict(color=_AXIS_TXT, size=11)),
+        legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="right", x=1, font=dict(size=12)),
         hovermode="x unified",
     )
     return fig
@@ -647,12 +701,11 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
         obs_m = obs[obs["dt"] >= month_start].copy()
         st.plotly_chart(build_hourly_continuous_figure(obs_m, days, sheet_avg), use_container_width=True)
         st.caption(f"{obs_m['dt'].min():%m/%d %H:%M} ~ {obs_m['dt'].max():%m/%d %H:%M} · "
-                   f"색 음영=선택한 {len(days)}일(진한 부분=최신일 최저기온 지속 구간) · 주황 점선=일평균기온(구글시트)")
+                   f"색 음영=선택한 {len(days)}일(진한 부분=날짜별 최저기온 지속 구간) · 주황 점선=일평균기온(구글시트)")
     else:
         st.plotly_chart(build_hourly_compare_figure(days), use_container_width=True)
-        r0 = days[0]["stats"]
-        st.caption(f"※ 음영=최신일({days[0]['label']}) 최저기온 {r0['tmin']:.1f}℃에서 +{r0['tol']:g}℃ 이내"
-                   f"({r0['tmin'] + r0['tol']:.1f}℃ 이하)로 이어진 구간 {r0['run_start']}~{r0['run_end']}시({r0['run_cnt']}시간) · "
+        runs = " · ".join(f"{dd['label']} {dd['stats']['run_start']}~{dd['stats']['run_end']}시" for dd in days)
+        st.caption(f"※ 음영=날짜별 최저기온에서 +{days[0]['stats']['tol']:g}℃ 이내로 이어진 구간 ({runs}) · "
                    "마름모=그날의 최저기온 · 점선·왼쪽 네모=일평균기온(구글시트) · 24시=다음날 00:00")
 
     st.dataframe(
