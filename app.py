@@ -212,7 +212,7 @@ def load_historical_data_common():
 # [공통 함수 2] 2026년 계획 데이터 로드
 # ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
-def load_2026_plan_data_common():
+def _load_2026_plan_excel():
     path = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
     if not path.exists(): return None
     try:
@@ -254,6 +254,68 @@ def load_2026_plan_data_common():
            
         return df[['날짜', 'plan_gj', 'plan_m3']]
     except: return None
+
+# ─────────────────────────────────────────────────────────
+# [공통 함수 2-1] 공급량 '계획'을 구글시트에서 로드 (H열: 계획 공급량(MJ), I열: 계획 공급량(M3))
+#  - 실적과 같은 시트(gid=0)를 사용. 엑셀 파일은 시트를 읽지 못할 때만 대체용으로 사용
+# ─────────────────────────────────────────────────────────
+PLAN_SHEET_ID = "13HrIz6OytYDykXeXzXJ02I6XbaKin1YaKBoO2kBd6Bs"
+
+
+def _parse_plan_sheet(raw: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """시트 DataFrame에서 일자·계획(MJ)·계획(M3)을 찾아 (날짜, plan_gj, plan_m3)로 변환"""
+    df = raw.copy()
+    df.columns = [str(c).replace(" ", "").strip() for c in df.columns]
+    col_date = next((c for c in df.columns if "일자" in c or "date" in c.lower()), None)
+    col_mj = next((c for c in df.columns if "계획" in c and ("MJ" in c.upper() or "GJ" in c.upper())), None)
+    col_m3 = next((c for c in df.columns if "계획" in c and "M3" in c.upper()), None)
+    # 헤더 이름으로 못 찾으면 시트의 H열(8번째), I열(9번째)을 사용
+    if col_mj is None and len(df.columns) > 7:
+        col_mj = df.columns[7]
+    if col_m3 is None and len(df.columns) > 8:
+        col_m3 = df.columns[8]
+    if col_date is None or col_mj is None:
+        return None
+
+    def _num(s: pd.Series) -> pd.Series:   # '1,303,693' 같은 콤마 문자열도 숫자로
+        return pd.to_numeric(s.astype(str).str.replace(",", "").str.strip(), errors="coerce")
+
+    out = pd.DataFrame({"날짜": pd.to_datetime(df[col_date], errors="coerce")})
+    mj = _num(df[col_mj])
+    out["plan_gj"] = mj / 1000.0 if "MJ" in col_mj.upper() else mj       # MJ → GJ
+    out["plan_m3"] = _num(df[col_m3]) if col_m3 is not None else 0.0
+    out = out.dropna(subset=["날짜"])
+    out = out[out["plan_gj"].fillna(0) > 0]                              # 계획이 입력된 날만
+    out["plan_m3"] = out["plan_m3"].fillna(0)
+    out = out.drop_duplicates("날짜", keep="last").sort_values("날짜").reset_index(drop=True)
+    return out[["날짜", "plan_gj", "plan_m3"]]
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def load_2026_plan_with_source():
+    """(계획 DataFrame, 출처 문구) 반환. 출처: 구글시트 / 엑셀(대체) / None"""
+    url = f"https://docs.google.com/spreadsheets/d/{PLAN_SHEET_ID}/export?format=csv&gid=0"
+    try:
+        plan = _parse_plan_sheet(pd.read_csv(url))
+        if plan is not None and not plan.empty:
+            return plan, "구글시트 H·I열"
+    except Exception:
+        pass
+    plan = _load_2026_plan_excel()
+    if plan is not None and not plan.empty:
+        return plan, "엑셀 파일 (구글시트를 읽지 못해 대체)"
+    return None, None
+
+
+def load_2026_plan_data_common():
+    """공급량 계획(날짜, plan_gj, plan_m3). 탭1·탭2 공통 사용"""
+    return load_2026_plan_with_source()[0]
+
+
+def plan_source_caption() -> str:
+    _, src = load_2026_plan_with_source()
+    return f"계획 출처: {src}" if src else "⚠️ 계획 데이터를 읽지 못했습니다 (구글시트 H·I열 확인)"
+
 
 # ─────────────────────────────────────────────────────────
 # [공통 함수 3] 기온 매트릭스용 구글시트 데이터 로드 (1번째 코드와 동일 소스)
@@ -619,6 +681,7 @@ def run_tab1_management():
         st.session_state.tab1_df = df
 
     st.sidebar.header("📂 [관리] 데이터 파일")
+    st.sidebar.caption(plan_source_caption())
     st.sidebar.file_uploader("연간계획 엑셀 업로드", type=['xlsx'], key="u1")
     
     st.title("🔥 도시가스 공급실적 관리")
@@ -872,32 +935,9 @@ def run_tab2_analysis():
                 xls.parse("일별실적") if "일별실적" in xls.sheet_names else pd.DataFrame())
     
     def load_2026_plan_file():
-        try:
-            path = Path(__file__).parent / "2026_연간_일별공급계획_2.xlsx"
-            if not path.exists(): return None
-            raw = pd.read_excel(path, sheet_name='연간', header=None)
-            header_idx = None
-            for i, row in raw.iterrows():
-                if '연' in row.astype(str).values and '월' in row.astype(str).values:
-                    header_idx = i
-                    break
-            if header_idx is None: return None
-            df = raw.iloc[header_idx+1:].copy()
-            df.columns = raw.iloc[header_idx].astype(str).str.replace(r'\s+', '', regex=True).tolist()
-            col_map = {}
-            for c in df.columns:
-                if '연' in c: col_map['y'] = c
-                elif '월' in c: col_map['m'] = c
-                elif '일' in c: col_map['d'] = c
-                elif ('계획' in c or '예상' in c) and 'GJ' in c: col_map['p_gj'] = c
-            df['날짜'] = pd.to_datetime({
-                'year': pd.to_numeric(df[col_map['y']], errors='coerce'),
-                'month': pd.to_numeric(df[col_map['m']], errors='coerce'),
-                'day': pd.to_numeric(df[col_map['d']], errors='coerce')
-            }, errors='coerce')
-            df['plan_gj'] = pd.to_numeric(df[col_map['p_gj']], errors='coerce').fillna(0)
-            return df[['날짜', 'plan_gj']].dropna()
-        except: return None
+        plan = load_2026_plan_data_common()
+        if plan is None or plan.empty: return None
+        return plan[['날짜', 'plan_gj']].dropna()
 
     def clean_supply_month_df(df):
         if df.empty: return df
@@ -1122,7 +1162,7 @@ def run_tab2_analysis():
         plan_curve_x = []
         plan_curve_y = []
         if plan_df is not None:
-            plan_month = plan_df[plan_df['날짜'].dt.month == sel_month]
+            plan_month = plan_df[(plan_df['날짜'].dt.year == sel_year) & (plan_df['날짜'].dt.month == sel_month)]
             if not plan_month.empty:
                 plan_curve_x = plan_month['날짜'].dt.day.tolist()
                 plan_curve_y = plan_month['plan_gj'].tolist()
@@ -1547,6 +1587,7 @@ def run_tab2_analysis():
         hourly_temperature_section(key_prefix + "hourly_")
 
     st.sidebar.header("📂 [분석] 데이터 파일")
+    st.sidebar.caption(plan_source_caption())
     DEFAULT_SUPPLY_XLSX = "공급량(계획_실적).xlsx"
     uploaded_analysis = st.sidebar.file_uploader("공급량 엑셀 업로드", type=['xlsx'], key="u2")
     
