@@ -427,6 +427,88 @@ def load_obs_hourly(signature):
     return df[["dt", "일자", "시", "temp"]].reset_index(drop=True)
 
 
+# ─────────────────────────────────────────────────────────
+# [공통 함수 4-1] 시간대별 공급량 (HOURLY_SUPPLY*.csv / .xlsx)
+#  - 열: 일자, 시(1~24), 공급량(m3)  ← 공급량현황 '합계' 아래 '가스공사' 시간별 값
+#  - 파일 이름은 HOURLY_SUPPLY 로 시작하면 뒤는 무엇이든 가능, 여러 개면 합치고 겹치면 최신 파일 우선
+# ─────────────────────────────────────────────────────────
+def _supply_files() -> List[Path]:
+    base = Path(__file__).parent
+    files = [p for p in base.iterdir() if p.is_file() and p.suffix.lower() in (".csv", ".xlsx")
+             and p.name.upper().startswith("HOURLY_SUPPLY")]
+    return sorted(files, key=lambda p: (p.name, p.stat().st_mtime))
+
+
+def _supply_signature():
+    return tuple((p.name, p.stat().st_mtime) for p in _supply_files())
+
+
+def _read_supply_file(path: Path) -> Optional[pd.DataFrame]:
+    raws = []
+    if path.suffix.lower() == ".xlsx":
+        try:
+            raws.append(pd.read_excel(path))
+        except Exception:
+            return None
+    else:
+        for enc in ("utf-8-sig", "cp949", "euc-kr"):
+            try:
+                raws.append(pd.read_csv(path, encoding=enc))
+                break
+            except Exception:
+                continue
+    for raw in raws:
+        raw.columns = [str(c).strip() for c in raw.columns]
+        if len(raw.columns) < 3:
+            continue
+        c_d = next((c for c in raw.columns if "일자" in c or "날짜" in c), raw.columns[0])
+        c_h = next((c for c in raw.columns if c == "시" or "시간" in c), raw.columns[1])
+        c_v = next((c for c in raw.columns if "가스공사" in c or "공급" in c), raw.columns[2])
+        out = pd.DataFrame({
+            "일자": pd.to_datetime(raw[c_d], errors="coerce").dt.normalize(),
+            "시": pd.to_numeric(raw[c_h].astype(str).str.extract(r"(\d+)")[0], errors="coerce"),
+            "supply": pd.to_numeric(raw[c_v].astype(str).str.replace(",", ""), errors="coerce"),
+        }).dropna()
+        out = out[(out["시"] >= 1) & (out["시"] <= 24)]
+        out["시"] = out["시"].astype(int)
+        return out
+    return None
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def load_hourly_supply(signature):
+    """(일자, 시, supply[m3]) 반환. 없으면 None"""
+    frames = [f for f in (_read_supply_file(p) for p in _supply_files()) if f is not None and not f.empty]
+    if not frames:
+        return None
+    df = pd.concat(frames, ignore_index=True).drop_duplicates(["일자", "시"], keep="last")
+    return df.sort_values(["일자", "시"]).reset_index(drop=True)
+
+
+def _apply_supply_layout(fig: go.Figure, y_lo: float, y_hi: float, ymax: float):
+    """기온(좌측 축)과 공급량 막대(우측 축)를 한 그래프에 합침. 막대는 아래쪽 약 30%에 깔리도록 축 범위를 잡는다."""
+    ext = (y_hi - y_lo) * 0.45                       # 기온 축 아래로 여백을 만들어 막대 자리 확보
+    step_t = 2 if (y_hi - y_lo) <= 24 else 5
+    t_ticks = [v for v in range(int(np.ceil(y_lo / step_t)) * step_t, int(y_hi) + 1, step_t)]   # 기온 눈금은 실제 기온 구간만
+    step_s = 50000 if ymax > 120000 else 20000
+    s_ticks = list(range(0, int(ymax // step_s + 2) * step_s, step_s))
+    fig.update_layout(
+        margin=dict(l=10, r=10, t=50, b=40),
+        yaxis=dict(range=[y_lo - ext, y_hi], tickmode="array", tickvals=t_ticks, automargin=True),
+        yaxis2=dict(overlaying="y", side="right", range=[0, ymax / 0.30], showgrid=False, showline=False,
+                    zeroline=False, tickmode="array", tickvals=s_ticks, ticktext=[f"{v:,}" for v in s_ticks],
+                    tickfont=dict(color=_AXIS_TXT, size=11), automargin=True,
+                    title=dict(text="공급량 (m³)", font=dict(color=_AXIS_TXT, size=12))),
+        barmode="group", bargap=0.25, bargroupgap=0.05,
+    )
+
+
+def _supply_by_day(supply: Optional[pd.DataFrame]) -> dict:
+    if supply is None or supply.empty:
+        return {}
+    return {pd.Timestamp(d): g.sort_values("시") for d, g in supply.groupby("일자")}
+
+
 HOURLY_LOW_TOL = 1.0   # '최저기온 지속' 기준: 그날 최저기온 +1℃ 이내
 
 
@@ -465,7 +547,7 @@ def _rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{alpha})"
 
 
-def build_hourly_compare_figure(days: list) -> go.Figure:
+def build_hourly_compare_figure(days: list, supply_days: Optional[dict] = None) -> go.Figure:
     """days: 최신일 → 과거 순. 하루 1~24시 축에 날짜별 시간대별 기온을 겹쳐 그린다.
     스타일: 최신일은 굵은 파란 곡선 + 아래 옅은 면, 과거일은 얇은 점선."""
     fig = go.Figure()
@@ -560,6 +642,20 @@ def build_hourly_compare_figure(days: list) -> go.Figure:
         ))
     fig.add_vline(x=0.4, line_dash="dot", line_color="rgba(100,116,139,0.35)", line_width=1)
 
+    if supply_days:
+        ymax = 1.0
+        for i in range(len(days) - 1, -1, -1):          # 과거일 → 최신일 순으로 그려 최신일 막대가 맨 앞/오른쪽
+            dd = days[i]
+            g = supply_days.get(pd.Timestamp(dd["date"]))
+            if g is None or g.empty:
+                continue
+            ymax = max(ymax, float(g["supply"].max()))
+            fig.add_trace(go.Bar(
+                x=g["시"], y=g["supply"], yaxis="y2", name=f"{dd['label']} 공급량(m³, 우측 축)", showlegend=(i == 0),
+                marker=dict(color=_rgba(dd["color"], 0.55 if i == 0 else 0.28)),
+                hovertemplate=f"{dd['label']} {dd['tag']} %{{x}}시<br>공급량 %{{y:,.0f}} m³<extra></extra>",
+            ))
+
     fig.update_layout(
         height=520, margin=dict(l=10, r=10, t=50, b=10), plot_bgcolor="white",
         xaxis=dict(title=dict(text="시 (24시 = 다음날 00:00)", font=dict(color=_AXIS_TXT, size=12)),
@@ -571,10 +667,13 @@ def build_hourly_compare_figure(days: list) -> go.Figure:
         legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="right", x=1, font=dict(size=12)),
         hovermode="x unified",
     )
+    if supply_days:
+        _apply_supply_layout(fig, y_lo, y_hi, ymax)
     return fig
 
 
-def build_hourly_continuous_figure(obs_m: pd.DataFrame, days: list, sheet_avg: dict) -> go.Figure:
+def build_hourly_continuous_figure(obs_m: pd.DataFrame, days: list, sheet_avg: dict,
+                                   supply: Optional[pd.DataFrame] = None) -> go.Figure:
     """월초~현재까지 시간별 기온을 가로로 하나의 곡선으로 이어서 표시 (선택한 날짜는 색 음영)"""
     fig = go.Figure()
     for dd in days:
@@ -618,6 +717,17 @@ def build_hourly_continuous_figure(obs_m: pd.DataFrame, days: list, sheet_avg: d
             marker=dict(size=5, color=_DAY_COLORS[1]),
             hovertemplate="%{x|%m/%d} 일평균<br>🌡 %{y:.1f}℃<extra></extra>",
         ))
+    sup_max = None
+    if supply is not None and not supply.empty:
+        sm = supply[supply["일자"] >= pd.Timestamp(obs_m["dt"].min()).normalize()].copy()
+        if not sm.empty:
+            sm["dt"] = sm["일자"] + pd.to_timedelta(sm["시"], unit="h")       # 24시 = 다음날 00:00
+            sup_max = float(sm["supply"].max())
+            fig.add_trace(go.Bar(
+                x=sm["dt"], y=sm["supply"], yaxis="y2", name="시간별 공급량(가스공사)", showlegend=True,
+                marker=dict(color=_rgba(_DAY_COLORS[0], 0.55)), width=3600 * 1000 * 0.8,
+                hovertemplate="%{x|%m/%d %H:%M}<br>공급량 %{y:,.0f} m³<extra></extra>",
+            ))
     fig.update_layout(
         height=520, margin=dict(l=10, r=10, t=50, b=10), plot_bgcolor="white",
         xaxis=dict(title=None, tickformat="%m/%d", dtick=86400000, tickangle=-45,
@@ -628,6 +738,9 @@ def build_hourly_continuous_figure(obs_m: pd.DataFrame, days: list, sheet_avg: d
         legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="right", x=1, font=dict(size=12)),
         hovermode="x unified",
     )
+    if sup_max:
+        _apply_supply_layout(fig, y_lo, y_hi, sup_max)
+        fig.update_layout(barmode="overlay")
     return fig
 
 
@@ -657,9 +770,9 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
     cap_slot = st.empty()          # 안내 문구 자리 (아래 버튼 선택값이 정해진 뒤 채움)
 
     try:    # 버튼들을 같은 높이로 맞춤 (구버전 streamlit은 옵션이 없어 기본 정렬)
-        b_left, b_right = st.columns([4.5, 1.3], vertical_alignment="center")
+        b_left, b_right, b_sup = st.columns([3.3, 1.2, 1.9], vertical_alignment="center")
     except TypeError:
-        b_left, b_right = st.columns([4.5, 1.3])
+        b_left, b_right, b_sup = st.columns([3.3, 1.2, 1.9])
     with b_left:   # 최신일 기준 D-n 버튼 (D-3 = 최신일 + 3일 전까지 = 4일)
         if hasattr(st, "segmented_control"):
             pick = st.segmented_control("비교 기간", opts, default=opts[0], key=f"{key_prefix}dn",
@@ -670,6 +783,9 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
     with b_right:  # 그래프 우측 상단
         cont = st.toggle("이어보기", value=False, key=f"{key_prefix}continue",
                          help=f"{last_day.month}월 1일부터 현재까지 시간별 기온을 가로로 이어서 보여줍니다.")
+    with b_sup:    # 그래프 우측 상단: 시간대별 공급량 비교
+        show_sup = st.toggle("시간대별 공급량 비교", value=False, key=f"{key_prefix}supply",
+                             help="시간대별 기온 그래프 아래에 시간별 공급량(가스공사, m³) 막대그래프를 함께 보여줍니다.")
     pick = pick or opts[0]
     n_back = int(pick.split("-")[1])
     cap_slot.caption(f"비교 기간: 최신일({last_day:%m/%d}) 기준 {pick}까지 총 {n_back + 1}일 · "
@@ -696,26 +812,49 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
                      "color": _DAY_COLORS[k], "stats": stats, "avg": avg,
                      "date": d_ts.strftime("%Y-%m-%d"), "n": int(len(stats["hours"]))})
 
+    supply, supply_days = None, None
+    if show_sup:
+        supply = load_hourly_supply(_supply_signature())
+        if supply is None or supply.empty:
+            st.warning("app.py와 같은 폴더에 `HOURLY_SUPPLY`로 시작하는 시간대별 공급량 파일(csv/xlsx)이 없습니다. "
+                       "열: 일자, 시, 공급량(m3)  예) HOURLY_SUPPLY_20261030.csv")
+            supply = None
+        else:
+            supply_days = _supply_by_day(supply)
+            if not any(pd.Timestamp(dd["date"]) in supply_days for dd in days):
+                st.info("선택한 날짜에 해당하는 시간대별 공급량 자료가 아직 없습니다.")
+                supply = supply_days = None
+
     if cont:
         month_start = last_day.replace(day=1)
         obs_m = obs[obs["dt"] >= month_start].copy()
-        st.plotly_chart(build_hourly_continuous_figure(obs_m, days, sheet_avg), use_container_width=True)
+        st.plotly_chart(build_hourly_continuous_figure(obs_m, days, sheet_avg, supply), use_container_width=True)
         st.caption(f"{obs_m['dt'].min():%m/%d %H:%M} ~ {obs_m['dt'].max():%m/%d %H:%M} · "
                    f"색 음영=선택한 {len(days)}일(진한 부분=날짜별 최저기온 지속 구간) · 주황 점선=일평균기온(구글시트)")
     else:
-        st.plotly_chart(build_hourly_compare_figure(days), use_container_width=True)
+        st.plotly_chart(build_hourly_compare_figure(days, supply_days), use_container_width=True)
         runs = " · ".join(f"{dd['label']} {dd['stats']['run_start']}~{dd['stats']['run_end']}시" for dd in days)
         st.caption(f"※ 음영=날짜별 최저기온에서 +{days[0]['stats']['tol']:g}℃ 이내로 이어진 구간 ({runs}) · "
                    "마름모=그날의 최저기온 · 점선·왼쪽 네모=일평균기온(구글시트) · 24시=다음날 00:00")
 
-    st.dataframe(
-        pd.DataFrame([{
+    def _sup_total(dd):
+        g = (supply_days or {}).get(pd.Timestamp(dd["date"]))
+        return None if g is None or g.empty else float(g["supply"].sum())
+
+    tbl_rows = [{
             "날짜": dd["date"], "구분": dd["tag"],
             "평균기온(℃)": dd["avg"],
             "최저기온(℃)": dd["stats"]["tmin"], "최저 발생(시)": dd["stats"]["tmin_hour"],
             "최고기온(℃)": dd["stats"]["tmax"], "최고 발생(시)": dd["stats"]["tmax_hour"],
             "관측 시간 수": dd["n"],
-        } for dd in days]).style.format({"평균기온(℃)": "{:.1f}", "최저기온(℃)": "{:.1f}", "최고기온(℃)": "{:.1f}"})
+        } for dd in days]
+    fmt = {"평균기온(℃)": "{:.1f}", "최저기온(℃)": "{:.1f}", "최고기온(℃)": "{:.1f}"}
+    if supply_days:
+        for row, dd in zip(tbl_rows, days):
+            row["일 공급량(m³)"] = _sup_total(dd)
+        fmt["일 공급량(m³)"] = "{:,.0f}"
+    st.dataframe(
+        pd.DataFrame(tbl_rows).style.format(fmt, na_rep="-")
           .set_properties(**{"text-align": "center"})
           .set_table_styles([dict(selector="th", props=[("text-align", "center")])]),
         use_container_width=True, hide_index=True,
@@ -729,6 +868,16 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
             f"최저기온 {a['stats']['tmin']:.1f}℃ vs {b['stats']['tmin']:.1f}℃ "
             f"({a['stats']['tmin'] - b['stats']['tmin']:+.1f}℃)"
         )
+    if supply_days and len(days) >= 2:
+        sa, sb = _sup_total(days[0]), _sup_total(days[1])
+        if sa and sb:
+            ga, gb = supply_days[pd.Timestamp(days[0]["date"])], supply_days[pd.Timestamp(days[1]["date"])]
+            m = ga.merge(gb, on="시", suffixes=("_a", "_b"))
+            m["d"] = m["supply_a"] - m["supply_b"]
+            up = m.sort_values("d", ascending=False).head(3)
+            hrs = ", ".join(f"{int(r['시'])}시({r['d']:+,.0f})" for _, r in up.iterrows())
+            st.info(f"공급량(가스공사) {days[0]['label']} {sa:,.0f} m³ vs {days[1]['label']} {sb:,.0f} m³ "
+                    f"({sa - sb:+,.0f} m³, {(sa / sb - 1) * 100:+.1f}%) · 전일 대비 증가가 큰 시간: {hrs}")
     unfinished = [dd for dd in days if dd["n"] < 24]
     if unfinished:
         st.caption("※ " + ", ".join(f"{dd['label']}({dd['n']}시간 관측)" for dd in unfinished)
