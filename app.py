@@ -504,20 +504,25 @@ def build_hourly_compare_figure(days: list) -> go.Figure:
     label_y = {k: pos[j] - drift for j, k in enumerate(order)}
     for k, dd in enumerate(days):
         c = dd["color"]
+        fig.add_trace(go.Scatter(                      # 평균기온 수평선(점선)
+            x=[0, 24.7], y=[dd["avg"], dd["avg"]], mode="lines",
+            line=dict(color=c, width=1.6, dash="dash"), opacity=0.8,
+            showlegend=False, hoverinfo="skip",
+        ))
         fig.add_trace(go.Scatter(
             x=[0], y=[dd["avg"]], mode="markers",
             marker=dict(size=13, symbol="square", color=c, line=dict(color="white", width=1.5)),
             showlegend=False, hovertemplate=f"{dd['label']} 평균 %{{y:.1f}}℃<extra></extra>",
         ))
         fig.add_trace(go.Scatter(
-            x=[-0.25], y=[label_y[k]], mode="text", text=[f"<b>{dd['avg']:.1f}℃</b>"],
+            x=[-0.25], y=[label_y[k]], mode="text", text=[f"<b>{dd['label']} 평균 {dd['avg']:.1f}℃</b>"],
             textposition="middle left", textfont=dict(color=c, size=12),
             showlegend=False, hoverinfo="skip", cliponaxis=False,
         ))
     fig.add_vline(x=0.4, line_dash="dot", line_color="rgba(100,116,139,0.5)", line_width=1)
     fig.update_layout(
         height=520, margin=dict(l=10, r=10, t=30, b=10),
-        xaxis=dict(title="시 (24시 = 다음날 00:00)", dtick=1, range=[-1.4, 24.7], tickmode="array",
+        xaxis=dict(title="시 (24시 = 다음날 00:00)", dtick=1, range=[-3.2, 24.7], tickmode="array",
                    tickvals=list(range(0, 25)), ticktext=["평균"] + [str(h) for h in range(1, 25)]),
         yaxis=dict(title="기온 (℃)", gridcolor="rgba(148,163,184,0.25)"),
         legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
@@ -648,7 +653,7 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
         r0 = days[0]["stats"]
         st.caption(f"※ 음영=최신일({days[0]['label']}) 최저기온 {r0['tmin']:.1f}℃에서 +{r0['tol']:g}℃ 이내"
                    f"({r0['tmin'] + r0['tol']:.1f}℃ 이하)로 이어진 구간 {r0['run_start']}~{r0['run_end']}시({r0['run_cnt']}시간) · "
-                   "마름모=그날의 최저기온 · 맨 왼쪽 '평균'=일평균기온(구글시트) · 24시=다음날 00:00")
+                   "마름모=그날의 최저기온 · 점선·왼쪽 네모=일평균기온(구글시트) · 24시=다음날 00:00")
 
     st.dataframe(
         pd.DataFrame([{
