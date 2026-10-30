@@ -365,14 +365,26 @@ def load_obs_hourly(signature):
     return df[["dt", "일자", "시", "temp"]].reset_index(drop=True)
 
 
-def hourly_day_stats(day_df: pd.DataFrame) -> dict:
-    """하루(최대 24개 시각) 데이터에서 최저/최고 기온과 발생 시각 계산"""
+HOURLY_LOW_TOL = 1.0   # '최저기온 지속' 기준: 그날 최저기온 +1℃ 이내
+
+
+def hourly_day_stats(day_df: pd.DataFrame, tol: float = HOURLY_LOW_TOL) -> dict:
+    """하루(최대 24개 시각) 데이터에서 최저/최고 기온과 발생 시각,
+    그리고 '최저기온 지속 구간'(최저 발생 시각을 포함해 최저+tol℃ 이내로 이어진 구간) 계산"""
     d = day_df.sort_values("시")
     h = d["시"].to_numpy()
     t = d["temp"].to_numpy(dtype=float)
     m8 = t[h % 3 == 0]
+    i_min = int(t.argmin())
+    limit = float(t.min()) + tol + 1e-9
+    lo = hi = i_min
+    while lo - 1 >= 0 and t[lo - 1] <= limit and h[lo - 1] == h[lo] - 1:
+        lo -= 1
+    while hi + 1 < len(t) and t[hi + 1] <= limit and h[hi + 1] == h[hi] + 1:
+        hi += 1
     return {
         "hours": h, "temps": t,
+        "run_start": int(h[lo]), "run_end": int(h[hi]), "run_cnt": int(hi - lo + 1), "tol": tol,
         "tmin": float(t.min()), "tmin_hour": int(h[t.argmin()]),
         "tmax": float(t.max()), "tmax_hour": int(h[t.argmax()]),
         # 구글시트 평균기온이 없을 때만 쓰는 대체값(기상청 방식: 3·6·…·24시 8개 평균)
@@ -388,6 +400,18 @@ def build_hourly_compare_figure(days: list) -> go.Figure:
     """days: 최신일 → 과거 순. 하루 1~24시 축에 날짜별 시간대별 기온을 겹쳐 그린다."""
     fig = go.Figure()
     label_min = len(days) <= 3          # 날짜가 많으면 글자 겹침을 막기 위해 최저 표시는 마름모만
+    # 최신일의 최저기온 지속 구간을 그래프 뒤쪽에 음영으로 표시
+    r = days[0]["stats"]
+    fig.add_vrect(x0=r["run_start"] - 0.5, x1=r["run_end"] + 0.5, fillcolor=days[0]["color"],
+                  opacity=0.15, line_width=0, layer="below")
+    left_side = (r["run_start"] + r["run_end"]) / 2 < 12
+    fig.add_annotation(
+        x=(r["run_start"] - 0.5) if left_side else (r["run_end"] + 0.5), y=1, yref="paper",
+        xanchor="left" if left_side else "right", yanchor="top", showarrow=False,
+        text=(f"<b>{days[0]['label']} 최저 {r['tmin']:.1f}℃ 지속<br>"
+              f"{r['run_start']}~{r['run_end']}시 ({r['run_cnt']}시간)</b>"),
+        font=dict(color=days[0]["color"], size=12), align="left" if left_side else "right",
+    )
     for i, dd in enumerate(days):
         s, c = dd["stats"], dd["color"]
         fig.add_trace(go.Scatter(
@@ -427,6 +451,11 @@ def build_hourly_continuous_figure(obs_m: pd.DataFrame, days: list, sheet_avg: d
             x=(d0 + pd.Timedelta(hours=12)).to_pydatetime(), y=1, yref="paper", yanchor="bottom",
             showarrow=False, text=f"<b>{dd['label']}</b>", font=dict(color=dd["color"], size=11),
         )
+    r = days[0]["stats"]            # 최신일의 최저기온 지속 구간은 더 진하게
+    d_new = pd.Timestamp(days[0]["date"])
+    fig.add_vrect(x0=(d_new + pd.Timedelta(hours=r["run_start"] - 0.5)).to_pydatetime(),
+                  x1=(d_new + pd.Timedelta(hours=r["run_end"] + 0.5)).to_pydatetime(),
+                  fillcolor=days[0]["color"], opacity=0.28, line_width=0, layer="below")
     fig.add_trace(go.Scatter(
         x=obs_m["dt"], y=obs_m["temp"], mode="lines", name="시간별 기온",
         line=dict(color="#475569", width=2),
@@ -521,10 +550,13 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
         obs_m = obs[obs["dt"] >= month_start].copy()
         st.plotly_chart(build_hourly_continuous_figure(obs_m, days, sheet_avg), use_container_width=True)
         st.caption(f"{obs_m['dt'].min():%m/%d %H:%M} ~ {obs_m['dt'].max():%m/%d %H:%M} · "
-                   f"색 음영=선택한 {len(days)}일 · 주황 점선=일평균기온(구글시트)")
+                   f"색 음영=선택한 {len(days)}일(진한 부분=최신일 최저기온 지속 구간) · 주황 점선=일평균기온(구글시트)")
     else:
         st.plotly_chart(build_hourly_compare_figure(days), use_container_width=True)
-        st.caption("※ 마름모=그날의 최저기온 · 범례의 평균=일평균기온(구글시트) · 24시=다음날 00:00")
+        r0 = days[0]["stats"]
+        st.caption(f"※ 음영=최신일({days[0]['label']}) 최저기온 {r0['tmin']:.1f}℃에서 +{r0['tol']:g}℃ 이내"
+                   f"({r0['tmin'] + r0['tol']:.1f}℃ 이하)로 이어진 구간 {r0['run_start']}~{r0['run_end']}시({r0['run_cnt']}시간) · "
+                   "마름모=그날의 최저기온 · 범례의 평균=일평균기온(구글시트) · 24시=다음날 00:00")
 
     st.dataframe(
         pd.DataFrame([{
