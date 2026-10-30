@@ -593,22 +593,28 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
         st.info("비교할 전날(D-1) 자료가 없습니다.")
         return
 
-    # 제목(좌) + 이어보기 버튼(우측)
-    h_title, h_cont = st.columns([4.5, 1.3])
-    with h_title:
-        st.markdown(f"### 🌡️ 시간대별 기온 분석 · 최신 {last_day:%m/%d}")
-    with h_cont:
+    # 제목 → 안내 문구 → [D-n 버튼 (좌) | 이어보기 (우)] → 그래프
+    st.markdown(f"### 🌡️ 시간대별 기온 분석 · 최신 {last_day:%m/%d}")
+    cap_slot = st.empty()          # 안내 문구 자리 (아래 버튼 선택값이 정해진 뒤 채움)
+
+    try:    # 버튼들을 같은 높이로 맞춤 (구버전 streamlit은 옵션이 없어 기본 정렬)
+        b_left, b_right = st.columns([4.5, 1.3], vertical_alignment="center")
+    except TypeError:
+        b_left, b_right = st.columns([4.5, 1.3])
+    with b_left:   # 최신일 기준 D-n 버튼 (D-3 = 최신일 + 3일 전까지 = 4일)
+        if hasattr(st, "segmented_control"):
+            pick = st.segmented_control("비교 기간", opts, default=opts[0], key=f"{key_prefix}dn",
+                                        label_visibility="collapsed")
+        else:  # 오래된 streamlit 버전 대비
+            pick = st.radio("비교 기간", opts, horizontal=True, key=f"{key_prefix}dn",
+                            label_visibility="collapsed")
+    with b_right:  # 그래프 우측 상단
         cont = st.toggle("이어보기", value=False, key=f"{key_prefix}continue",
                          help=f"{last_day.month}월 1일부터 현재까지 시간별 기온을 가로로 이어서 보여줍니다.")
-
-    # 그래프 상단: 최신일 기준 D-n 버튼 (D-3 = 최신일 + 3일 전까지 = 4일)
-    if hasattr(st, "segmented_control"):
-        pick = st.segmented_control("비교 기간", opts, default=opts[0], key=f"{key_prefix}dn")
-    else:  # 오래된 streamlit 버전 대비
-        pick = st.radio("비교 기간", opts, horizontal=True, key=f"{key_prefix}dn")
     pick = pick or opts[0]
     n_back = int(pick.split("-")[1])
-    st.caption(f"최신일({last_day:%m/%d}) 기준 {pick}까지 총 {n_back + 1}일 · 시간자료 최신 관측 {obs['dt'].max():%Y-%m-%d %H:%M}")
+    cap_slot.caption(f"비교 기간: 최신일({last_day:%m/%d}) 기준 {pick}까지 총 {n_back + 1}일 · "
+                     f"시간자료 최신 관측 {obs['dt'].max():%Y-%m-%d %H:%M}")
 
     # 평균기온은 구글시트(기상청 일평균) 값을 사용, 시트에 없으면 시간자료로 대체
     ts = load_temperature_sheet()
