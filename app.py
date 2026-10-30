@@ -1449,7 +1449,7 @@ def run_tab2_analysis():
         if not this_df.empty:
             ymin_fill = float(this_df[act_col].min() / 1000.0) * 0.5
             fig1.add_scatter(x=this_df["일"], y=[ymin_fill] * len(this_df), mode="lines",
-                             line=dict(width=0), showlegend=False, hoverinfo="skip")
+                             line=dict(width=0), showlegend=False, hoverinfo="skip", name="_base")
             fig1.add_scatter(
                 x=this_df["일"], y=this_df[act_col] / 1000.0, mode="lines+markers", name=f"{sel_year}년 실적",
                 line=dict(color=_C_MAIN, width=3.6, shape="spline", smoothing=0.6),
@@ -1490,13 +1490,32 @@ def run_tab2_analysis():
                        gridcolor=_gr, showline=False, zeroline=False, tickformat=","),
             legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="right", x=1, font=dict(size=12)),
         )
-        if _t_all:     # 기온은 아래 별도 패널(같은 날짜 축)에 표시해 공급량과 겹치지 않게 함
-            fig1.update_layout(
-                height=680, xaxis=dict(anchor="y2"),
-                yaxis=dict(domain=[0.36, 1.0]),
-                yaxis2=dict(title=dict(text="기온 (℃)", font=dict(color=_ax, size=12)), domain=[0.0, 0.28],
-                            gridcolor=_gr, showline=False, zeroline=False, automargin=True,
-                            tickfont=dict(color=_ax, size=11)))
+        if _t_all:
+            # 같은 그래프 안에서 공급량은 위쪽, 기온(우측 축)은 아래쪽 띠에 오도록 두 축의 범위를 맞춤
+            sup_y = [float(v) for t in fig1.data if getattr(t, "yaxis", None) != "y2" and t.name != "_base"
+                     for v in (t.y if t.y is not None else []) if pd.notna(v)]
+            tmp_y = [float(v) for t in fig1.data if getattr(t, "yaxis", None) == "y2"
+                     for v in (t.y if t.y is not None else []) if pd.notna(v)]
+            if sup_y and tmp_y:
+                s_lo, s_hi = min(sup_y), max(sup_y)
+                t_lo, t_hi = min(tmp_y), max(tmp_y)
+                s_w = max((s_hi - s_lo) / 0.56, 1.0); s_rng0 = s_lo - 0.42 * s_w          # 공급량: 위쪽 약 56%
+                t_w = max((t_hi - t_lo) / 0.30, 1.0); t_rng0 = t_lo - 0.03 * t_w          # 기온: 아래쪽 약 30%
+                for t in fig1.data:
+                    if t.name == "_base":
+                        t.y = [s_lo - 0.05 * (s_hi - s_lo)] * len(t.y)
+                import math
+                s_step = 10000 if (s_hi - s_lo) > 40000 else 5000
+                s_ticks = list(range(int(math.ceil(s_lo / s_step)) * s_step, int(s_hi) + 1, s_step))
+                t_step = 2 if (t_hi - t_lo) <= 14 else 5
+                t_ticks = list(range(int(math.floor(t_lo / t_step)) * t_step, int(math.ceil(t_hi)) + 1, t_step))
+                fig1.update_layout(
+                    height=620,
+                    yaxis=dict(range=[s_rng0, s_rng0 + s_w], tickmode="array", tickvals=s_ticks),
+                    yaxis2=dict(title=dict(text="기온 (℃)", font=dict(color=_ax, size=12)), overlaying="y", side="right",
+                                range=[t_rng0, t_rng0 + t_w], tickmode="array", tickvals=t_ticks, showgrid=False,
+                                showline=False, zeroline=False, automargin=True, tickfont=dict(color=_ax, size=11)))
+                fig1.add_hline(y=s_rng0 + 0.36 * s_w, line_dash="dot", line_color="rgba(100,116,139,0.35)", line_width=1)  # 공급량/기온 구분선
         st.plotly_chart(fig1, use_container_width=True)
 
         # ─────────────────────────────────────────────
