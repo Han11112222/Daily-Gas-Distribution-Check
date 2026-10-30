@@ -1490,10 +1490,13 @@ def run_tab2_analysis():
                        gridcolor=_gr, showline=False, zeroline=False, tickformat=","),
             legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="right", x=1, font=dict(size=12)),
         )
-        if _t_all:
-            fig1.update_layout(yaxis2=dict(title=dict(text="기온 (℃)", font=dict(color=_ax, size=12)),
-                                           overlaying="y", side="right", automargin=True, showgrid=False, showline=False, zeroline=False,
-                                           tickfont=dict(color=_ax, size=11)))
+        if _t_all:     # 기온은 아래 별도 패널(같은 날짜 축)에 표시해 공급량과 겹치지 않게 함
+            fig1.update_layout(
+                height=680, xaxis=dict(anchor="y2"),
+                yaxis=dict(domain=[0.36, 1.0]),
+                yaxis2=dict(title=dict(text="기온 (℃)", font=dict(color=_ax, size=12)), domain=[0.0, 0.28],
+                            gridcolor=_gr, showline=False, zeroline=False, automargin=True,
+                            tickfont=dict(color=_ax, size=11)))
         st.plotly_chart(fig1, use_container_width=True)
 
         # ─────────────────────────────────────────────
