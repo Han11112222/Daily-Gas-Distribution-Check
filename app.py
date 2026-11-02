@@ -758,7 +758,11 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
                 "(파일명 뒤 숫자는 달라도 됩니다. 예: OBS_ASOS_TIM_20261030083256.csv)")
         return
 
-    last_day = pd.Timestamp(obs["일자"].max())
+    # '최신일' = 24시간이 모두 들어온 마지막 날 (아직 진행 중인 날은 제외 → 전날과 공정하게 비교)
+    cnt = obs.groupby("일자")["시"].nunique()
+    full_days = cnt[cnt >= 24].index
+    last_day = pd.Timestamp(full_days.max() if len(full_days) else obs["일자"].max())
+    partial_day = pd.Timestamp(obs["일자"].max()) if pd.Timestamp(obs["일자"].max()) > last_day else None
     avail = set(pd.to_datetime(obs["일자"].unique()))
     opts = [f"D-{k}" for k in range(1, 7) if (last_day - pd.Timedelta(days=k)) in avail]
     if not opts:
@@ -789,7 +793,9 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
     pick = pick or opts[0]
     n_back = int(pick.split("-")[1])
     cap_slot.caption(f"비교 기간: 최신일({last_day:%m/%d}) 기준 {pick}까지 총 {n_back + 1}일 · "
-                     f"시간자료 최신 관측 {obs['dt'].max():%Y-%m-%d %H:%M}")
+                     f"시간자료 최신 관측 {obs['dt'].max():%Y-%m-%d %H:%M}"
+                     + (f" · {partial_day:%m/%d}은 아직 24시간이 모이지 않아 비교에서 제외 (이어보기에는 표시)" if partial_day is not None else "")
+                     + f" · 불러온 파일 {len(_obs_asos_files())}개")
 
     # 평균기온은 구글시트(기상청 일평균) 값을 사용, 시트에 없으면 시간자료로 대체
     ts = load_temperature_sheet()
@@ -1499,8 +1505,8 @@ def run_tab2_analysis():
             if sup_y and tmp_y:
                 s_lo, s_hi = min(sup_y), max(sup_y)
                 t_lo, t_hi = min(tmp_y), max(tmp_y)
-                s_w = max((s_hi - s_lo) / 0.56, 1.0); s_rng0 = s_lo - 0.42 * s_w          # 공급량: 위쪽 약 56%
-                t_w = max((t_hi - t_lo) / 0.30, 1.0); t_rng0 = t_lo - 0.03 * t_w          # 기온: 아래쪽 약 30%
+                s_w = max((s_hi - s_lo) / 0.65, 1.0); s_rng0 = s_lo - 0.33 * s_w          # 공급량: 위쪽 약 65%
+                t_w = max((t_hi - t_lo) / 0.25, 1.0); t_rng0 = t_lo - 0.02 * t_w          # 기온: 바로 아래 약 25%
                 for t in fig1.data:
                     if t.name == "_base":
                         t.y = [s_lo - 0.05 * (s_hi - s_lo)] * len(t.y)
@@ -1510,12 +1516,12 @@ def run_tab2_analysis():
                 t_step = 2 if (t_hi - t_lo) <= 14 else 5
                 t_ticks = list(range(int(math.floor(t_lo / t_step)) * t_step, int(math.ceil(t_hi)) + 1, t_step))
                 fig1.update_layout(
-                    height=620,
+                    height=740,
                     yaxis=dict(range=[s_rng0, s_rng0 + s_w], tickmode="array", tickvals=s_ticks),
                     yaxis2=dict(title=dict(text="기온 (℃)", font=dict(color=_ax, size=12)), overlaying="y", side="right",
                                 range=[t_rng0, t_rng0 + t_w], tickmode="array", tickvals=t_ticks, showgrid=False,
                                 showline=False, zeroline=False, automargin=True, tickfont=dict(color=_ax, size=11)))
-                fig1.add_hline(y=s_rng0 + 0.36 * s_w, line_dash="dot", line_color="rgba(100,116,139,0.35)", line_width=1)  # 공급량/기온 구분선
+                fig1.add_hline(y=s_rng0 + 0.29 * s_w, line_dash="dot", line_color="rgba(100,116,139,0.35)", line_width=1)  # 공급량/기온 구분선
         st.plotly_chart(fig1, use_container_width=True)
 
         # ─────────────────────────────────────────────
