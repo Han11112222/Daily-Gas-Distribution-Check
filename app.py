@@ -1597,10 +1597,10 @@ def run_tab2_analysis():
                 st.warning("최저기온 데이터를 가져오지 못했습니다. (구글시트 '최저' 열과 기상청 API 모두 값이 없음)")
 
             # 팔레트: 과거=라이트 그레이(#BEBEBE), 기준연도=블루(#005AC8), 평균기온=앰버, 최저기온=틸, 가정용 청구전수=스카이 블루
-            C_PAST, C_SEL, C_AVG, C_MIN, C_TXT = "#BEBEBE", "#005AC8", "#F08C00", "#0F9D7A", "#475569"
-            C_AVG_TXT, C_MIN_TXT = "#B45309", "#047857"          # 기온 라벨 글자색(회색 막대 위)
-            C_AVG_TXT_SEL, C_MIN_TXT_SEL = "#FDE68A", "#6EE7B7"  # 기준연도(진한 파랑 막대) 위에서는 밝은 글자색
-            C_HH, C_HH_TXT = "#0EA5E9", "#0369A1"
+            C_PAST, C_SEL, C_AVG, C_MIN, C_TXT = "#D3DEEE", "#1A73E8", "#F5A800", "#34A853", "#5F6368"
+            C_AVG_TXT, C_MIN_TXT = "#B97A00", "#1E7B3A"          # 기온 라벨 글자색(회색 막대 위)
+            C_AVG_TXT_SEL, C_MIN_TXT_SEL = "#FFE9A8", "#C8F0D3"  # 기준연도(진한 파랑 막대) 위에서는 밝은 글자색
+            C_HH, C_HH_TXT = "#A142F4", "#7A2FC0"
             sel_label = f"{sel_year}년"
             bar_colors = [C_SEL if c == sel_label else C_PAST for c in cum_df["연도"]]
 
@@ -1696,7 +1696,7 @@ def run_tab2_analysis():
                     fig_cum.add_trace(
                         go.Scatter(
                             x=cum_df["연도"], y=cum_df[col], mode="lines", yaxis=axis,
-                            line=dict(color="rgba(255,255,255,0.9)", width=6),
+                            line=dict(color="rgba(255,255,255,0.9)", width=7, shape="spline", smoothing=0.8),
                             hoverinfo="skip", showlegend=False,
                         )
                     )
@@ -1706,10 +1706,10 @@ def run_tab2_analysis():
                         go.Scatter(
                             x=cum_df["연도"], y=cum_df[col], name=f"{name}(℃)",
                             mode="lines+markers+text", yaxis=axis,
-                            line=dict(color=color, width=2.5, dash=dash),
+                            line=dict(color=color, width=3.2, dash=dash, shape="spline", smoothing=0.8),
                             marker=dict(size=9, symbol=symbol, color=color, line=dict(color="white", width=2)),
                             text=cum_df[col].map(lambda v: f"<b>{v:.1f}℃</b>" if pd.notna(v) else ""),
-                            textposition=label_positions(cum_df[col]),
+                            textposition="top center",   # 모든 점의 라벨을 점 바로 위 가운데 정렬
                             textfont=dict(color=label_colors, size=12),
                             hovertemplate="%{x}<br>" + name + ": %{y:.1f}℃<extra></extra>",
                         )
@@ -1724,7 +1724,7 @@ def run_tab2_analysis():
                         go.Scatter(
                             x=cum_df["연도"], y=cum_df["가정용 청구전수"], name="가정용 청구전수",
                             mode="lines+markers+text", yaxis="y3",
-                            line=dict(color=C_HH, width=2.5, dash="dash"),
+                            line=dict(color=C_HH, width=2.8, dash="dash", shape="spline", smoothing=0.8),
                             marker=dict(size=8, symbol="square", color=C_HH, line=dict(color="white", width=2)),
                             text=[
                                 (f"<b>{v:,.0f}{'*' if yr in hh_fallback else ''}</b>" if pd.notna(v) else "")
@@ -1740,17 +1740,18 @@ def run_tab2_analysis():
                 # 제목은 넣지 않고(위 소제목/캡션으로 대체), 범례는 아래로 이동해 겹침 방지
                 fig_cum.update_layout(
                     height=560,
-                    margin=dict(l=10, r=10, t=20, b=70),
-                    legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5),
-                    bargap=0.4,
-                    plot_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(l=10, r=10, t=50, b=20),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=12)),
+                    bargap=0.45,
+                    plot_bgcolor="white",
                     font=dict(size=12, color=C_TXT),
                 )
-                fig_cum.update_xaxes(showgrid=False, linecolor="rgba(148,163,184,0.5)")
+                fig_cum.update_xaxes(showgrid=False, showline=False, tickfont=dict(color="#80868B", size=12))
                 fig_cum.update_yaxes(
                     title_text="누적 공급량 (GJ)", secondary_y=False,
                     range=[0, y1_max],
-                    gridcolor="rgba(148,163,184,0.25)", zeroline=False
+                    gridcolor="rgba(148,163,184,0.20)", zeroline=False, showline=False,
+                    tickfont=dict(color="#80868B", size=11), title_font=dict(color="#80868B", size=12)
                 )
                 # 기온 값은 각 점의 라벨로 표시하므로 보조축 눈금은 숨김
                 fig_cum.update_yaxes(
