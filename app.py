@@ -1597,7 +1597,7 @@ def run_tab2_analysis():
                 st.warning("최저기온 데이터를 가져오지 못했습니다. (구글시트 '최저' 열과 기상청 API 모두 값이 없음)")
 
             # 팔레트: 과거=라이트 그레이(#BEBEBE), 기준연도=블루(#005AC8), 평균기온=앰버, 최저기온=틸, 가정용 청구전수=스카이 블루
-            C_PAST, C_SEL, C_AVG, C_MIN, C_TXT = "#D3DEEE", "#1A73E8", "#F5A800", "#34A853", "#5F6368"
+            C_PAST, C_SEL, C_AVG, C_MIN, C_TXT = "#D8DBE0", "#1A73E8", "#F5A800", "#34A853", "#5F6368"
             C_AVG_TXT, C_MIN_TXT = "#B97A00", "#1E7B3A"          # 기온 라벨 글자색(회색 막대 위)
             C_AVG_TXT_SEL, C_MIN_TXT_SEL = "#FFE9A8", "#C8F0D3"  # 기준연도(진한 파랑 막대) 위에서는 밝은 글자색
             C_HH, C_HH_TXT = "#A142F4", "#7A2FC0"
