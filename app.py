@@ -59,6 +59,12 @@ HOUSEHOLD_MONTHLY = {
     (2026, 9): 1197445,
 }
 
+# 2026년 사업계획 월 평균기온(℃) — 연도별 누적 공급량 차트에 점선으로 표시
+PLAN_TEMP_2026 = {
+    1: 1.1, 2: 4.7, 3: 9.8, 4: 15.0, 5: 19.1, 6: 24.4,
+    7: 27.2, 8: 27.9, 9: 22.5, 10: 16.0, 11: 10.0, 12: 2.4,
+}
+
 def household_total(year, month):
     """선택 연·월의 가정용 청구전수(월별총계)를 (값, 실제 사용한 (연, 월))로 반환.
     아직 집계되지 않은 최신 시점(예: 2026년 10월)은 가장 최근 월 값으로 대체하고,
@@ -1333,8 +1339,11 @@ def run_tab2_analysis():
         
         sub = df[(df["연"].between(yr_range[0], yr_range[1])) & (df["월"] == sel_m)].copy()
         sub = sub.dropna(subset=["평균기온(℃)", act_col])
+        # [수정] 아직 오지 않은 날(미래 일자)·미입력 일자는 엑셀에서 공급량=0, 평균기온=0으로 채워져 있어
+        # 0~5℃ 구간에 '공급량 0'으로 섞여 들어가 평균을 끌어내리므로 실적이 있는 날만 사용
+        sub = sub[sub[act_col] > 0]
         if sub.empty: return
-        
+
         bins = [-100, -10, -5, 0, 5, 10, 15, 20, 25, 30, 100]
         labels = ["<-10℃", "-10~-5℃", "-5~0℃", "0~5℃", "5~10℃", "10~15℃", "15~20℃", "20~25℃", "25~30℃", "≥30℃"]
         
@@ -1655,6 +1664,9 @@ def run_tab2_analysis():
                 min_band = None
 
             avg_vals = cum_df["평균기온(℃)"].dropna()
+            plan_temp = PLAN_TEMP_2026.get(int(sel_month))   # 2026 사업계획 월 평균기온
+            if plan_temp is not None:                        # 점선이 축 범위 밖으로 나가지 않도록 범위 계산에 포함
+                avg_vals = pd.concat([avg_vals, pd.Series([float(plan_temp)])], ignore_index=True)
             avg_range = band_range(avg_vals, avg_band[0], avg_band[1], 2.0) if not avg_vals.empty else None
             min_range = None
             if show_min:
@@ -1717,6 +1729,16 @@ def run_tab2_analysis():
 
                 # 평균기온=보조축(y2), 최저기온=별도 축(y4), 가정용 청구전수=별도 축(y3) — 모두 눈금은 숨김
                 add_temp_line("평균기온(℃)", "평균기온", C_AVG, C_AVG_TXT, C_AVG_TXT_SEL, "solid", "circle", "y2")
+                # 2026 사업계획 월 평균기온: 모든 연도에 걸친 수평 점선(평균기온선과 같은 보조축 y2)
+                if plan_temp is not None:
+                    fig_cum.add_trace(
+                        go.Scatter(
+                            x=cum_df["연도"], y=[float(plan_temp)] * len(cum_df), mode="lines", yaxis="y2",
+                            name=f"사업계획 평균기온 {plan_temp:.1f}℃",
+                            line=dict(color="#D93025", width=2.4, dash="dot"),
+                            hovertemplate="%{x}<br>사업계획 평균기온: " + f"{plan_temp:.1f}℃<extra></extra>",
+                        )
+                    )
                 if show_min and min_range is not None:
                     add_temp_line("최저기온(℃)", "최저기온", C_MIN, C_MIN_TXT, C_MIN_TXT_SEL, "dot", "diamond", "y4")
                 if show_hh and hh_range is not None:
