@@ -500,14 +500,14 @@ def render_abnormal_section(st_m, month: int, same_window: bool, upto_day: int):
 
 def kpi_card(label: str, rate: float, value_txt: str, delta_val: float, plan_txt: str,
              bg: str = "#F0F2F6", right_html: str = "") -> str:
-    """달성률 카드(HTML). 달성률은 기존 라벨(14px)의 2배(28px)로 표시, 배경색은 이상기온 판별 결과에 따라 변경"""
+    """달성률 카드(HTML). 기존 st.metric과 같은 크기, 배경색만 이상기온 판별 결과에 따라 변경"""
     up = delta_val >= 0
     d_color, d_bg = ("#09AB3B", "rgba(33,195,84,0.12)") if up else ("#FF2B2B", "rgba(255,43,43,0.10)")
     arrow = "↑" if up else "↓"
     return (
         f'<div style="background:{bg};border-radius:10px;padding:18px 20px;min-height:200px;display:flex;'
         f'justify-content:space-between;align-items:center;gap:12px;">'
-        f'<div><div style="font-size:28px;line-height:1.3;color:#31333F;">{label} <b>{rate:.1f}%</b></div>'
+        f'<div><div style="font-size:14px;line-height:1.3;color:#31333F;">{label} {rate:.1f}%</div>'
         f'<div style="font-size:36px;line-height:1.3;color:#31333F;margin-top:6px;">{value_txt}</div>'
         f'<div style="margin-top:6px;"><span style="font-size:14px;color:{d_color};background:{d_bg};'
         f'border-radius:12px;padding:2px 8px;">{arrow} {delta_val:+,.0f} GJ</span></div>'
@@ -1200,18 +1200,8 @@ def run_tab1_management():
         mtd_data = df[mask_mtd]
         a_mtd, p_mtd = mtd_data['실적(GJ)'].sum(), mtd_data['계획(GJ)'].sum()
         rate_mtd = (a_mtd/p_mtd*100) if p_mtd > 0 else 0
-        if stat_m:
-            m_html = (
-                f'<div style="text-align:right;min-width:130px;">'
-                f'<div style="font-size:13px;color:#555;">🌡 {target_date.month}월 평균기온</div>'
-                f'<div style="font-size:26px;font-weight:700;line-height:1.2;color:{ABN_TXT[kind_m]};">{stat_m["curr"]:.1f}℃</div>'
-                f'<div style="font-size:14px;font-weight:700;color:{ABN_TXT[kind_m]};">{ABN_LABEL[kind_m]}</div>'
-                f'<div style="font-size:12px;color:#777;">평년 {stat_m["mean5"]:.1f}℃</div></div>'
-            )
-        else:
-            m_html = ""
         st.markdown(kpi_card("월간 누적 달성률", rate_mtd, f"{int(a_mtd):,} GJ", a_mtd - p_mtd,
-                             f"누적 계획: {int(p_mtd):,} GJ", ABN_BG[kind_m], m_html), unsafe_allow_html=True)
+                             f"누적 계획: {int(p_mtd):,} GJ", ABN_BG[kind_m]), unsafe_allow_html=True)
 
     with col_g3:
         mask_ytd = (df['날짜'].dt.year == target_date.year) & (df['날짜'] <= target_date)
