@@ -1540,7 +1540,7 @@ def run_tab2_analysis():
         cutoff_day = int(this_df["일"].max()) if not this_df.empty else 31
 
         # 제목(좌) + 옵션 토글(우측 상단)
-        hd_title, hd_opt1, hd_opt2, hd_opt3 = st.columns([3, 1.5, 0.9, 1.3])
+        hd_title, hd_opt1, hd_opt2, hd_opt3, hd_opt4 = st.columns([2.6, 1.5, 0.9, 1.3, 1.0])
         with hd_title:
             st.markdown(f"### 📊 {sel_month}월 연도별 누적 공급량 · 평균기온 비교")
         with hd_opt1:
@@ -1552,6 +1552,9 @@ def run_tab2_analysis():
             show_min = st.toggle("최저기온", value=False, key=f"{key_prefix}cum_min")
         with hd_opt3:
             show_hh = st.toggle("가정용 청구전수", value=False, key=f"{key_prefix}cum_hh")
+        with hd_opt4:
+            show_exp = st.toggle("예상 실적", value=False, key=f"{key_prefix}cum_exp",
+                                 help="마지막 실적일 이후 남은 기간은 일일계획량을 그대로 더해, 월간 계획 대비 예상 달성률을 보여줍니다.")
 
         period_txt = f"1~{cutoff_day}일" if use_cutoff else "월말까지(월 전체)"
         st.caption(f"집계 기간: {sel_month}월 {period_txt}")
@@ -1664,7 +1667,12 @@ def run_tab2_analysis():
                 min_band = None
 
             avg_vals = cum_df["평균기온(℃)"].dropna()
-            plan_temp = PLAN_TEMP_2026.get(int(sel_month))   # 2026 사업계획 월 평균기온
+            # 사업계획 월 평균기온은 2026년 계획에만 해당 → 2026년 막대에만 표시
+            plan_temp = None
+            plan_idx = None
+            if sel_label in cum_df["연도"].values and sel_year == 2026:
+                plan_temp = PLAN_TEMP_2026.get(int(sel_month))
+                plan_idx = cum_df["연도"].tolist().index(sel_label)
             if plan_temp is not None:                        # 점선이 축 범위 밖으로 나가지 않도록 범위 계산에 포함
                 avg_vals = pd.concat([avg_vals, pd.Series([float(plan_temp)])], ignore_index=True)
             avg_range = band_range(avg_vals, avg_band[0], avg_band[1], 2.0) if not avg_vals.empty else None
@@ -1729,15 +1737,18 @@ def run_tab2_analysis():
 
                 # 평균기온=보조축(y2), 최저기온=별도 축(y4), 가정용 청구전수=별도 축(y3) — 모두 눈금은 숨김
                 add_temp_line("평균기온(℃)", "평균기온", C_AVG, C_AVG_TXT, C_AVG_TXT_SEL, "solid", "circle", "y2")
-                # 2026 사업계획 월 평균기온: 모든 연도에 걸친 수평 점선(평균기온선과 같은 보조축 y2)
+                # 2026 사업계획 월 평균기온: 2026년 막대에만 빨간 점선 + 온도 표기 (평균기온선과 같은 보조축 y2)
                 if plan_temp is not None:
-                    fig_cum.add_trace(
-                        go.Scatter(
-                            x=cum_df["연도"], y=[float(plan_temp)] * len(cum_df), mode="lines", yaxis="y2",
-                            name=f"사업계획 평균기온 {plan_temp:.1f}℃",
-                            line=dict(color="#D93025", width=2.4, dash="dot"),
-                            hovertemplate="%{x}<br>사업계획 평균기온: " + f"{plan_temp:.1f}℃<extra></extra>",
-                        )
+                    fig_cum.add_shape(
+                        type="line", xref="x", yref="y2",
+                        x0=plan_idx - 0.4, x1=plan_idx + 0.4, y0=float(plan_temp), y1=float(plan_temp),
+                        line=dict(color="#D93025", width=3, dash="dot"), layer="above",
+                    )
+                    fig_cum.add_annotation(
+                        xref="x", yref="y2", x=plan_idx, y=float(plan_temp), yshift=36,
+                        text=f"<b>계획 {plan_temp:.1f}℃</b>", showarrow=False,
+                        font=dict(color="#D93025", size=12), bgcolor="rgba(255,255,255,0.92)",
+                        bordercolor="#D93025", borderwidth=1, borderpad=3,
                     )
                 if show_min and min_range is not None:
                     add_temp_line("최저기온(℃)", "최저기온", C_MIN, C_MIN_TXT, C_MIN_TXT_SEL, "dot", "diamond", "y4")
@@ -1805,6 +1816,36 @@ def run_tab2_analysis():
                         "※ 가정용 청구전수 * 표시: 해당 월 자료가 아직 없어 가장 최근 월 값을 사용 ("
                         + ", ".join(f"{k} {m}월" for k, m in hh_fallback.items()) + ")"
                     )
+
+                # ── [NEW] 예상 실적: 실적(마지막 실적일까지) + 남은 기간 계획량 = 월간 계획 대비 % ──
+                if show_exp:
+                    pm = None
+                    if plan_df is not None and not this_df.empty:
+                        pm = plan_df[(plan_df["날짜"].dt.year == sel_year) & (plan_df["날짜"].dt.month == sel_month)]
+                    if pm is None or pm.empty:
+                        st.info(f"{sel_year}년 {sel_month}월 계획 데이터가 없어 예상 실적을 계산할 수 없습니다.")
+                    else:
+                        last_act = this_df["일자"].max()
+                        act_gj = float(this_df[act_col].sum() / 1000.0)
+                        plan_month_gj = float(pm["plan_gj"].sum())
+                        plan_to_date = float(pm.loc[pm["날짜"] <= last_act, "plan_gj"].sum())
+                        rem = pm[pm["날짜"] > last_act]
+                        rem_gj = float(rem["plan_gj"].sum())
+                        exp_gj = act_gj + rem_gj
+                        exp_rate = exp_gj / plan_month_gj * 100 if plan_month_gj > 0 else 0.0
+                        cur_rate = act_gj / plan_to_date * 100 if plan_to_date > 0 else 0.0
+                        rem_txt = (f"{int(rem['날짜'].dt.day.min())}~{int(rem['날짜'].dt.day.max())}일 ({len(rem)}일)"
+                                   if not rem.empty else "남은 기간 없음")
+                        color = "#1A73E8" if exp_rate >= 100 else "#D93025"
+                        st.markdown(f"""<div style="background:#F0F2F6;border-radius:10px;padding:14px 18px;margin-top:8px;">
+                            <div style="font-size:15px;color:#555;margin-bottom:6px;">🔮 <b>{sel_year}년 {sel_month}월 예상 실적</b> (남은 기간은 계획량 100% 가정)</div>
+                            <div style="font-size:15px;line-height:1.7;">
+                            실적 1~{int(last_act.day)}일: <b>{act_gj:,.0f} GJ</b> (해당 기간 계획 대비 {cur_rate:.1f}%)<br>
+                            + 남은 계획 {rem_txt}: <b>{rem_gj:,.0f} GJ</b><br>
+                            = 예상 월 공급량 <b>{exp_gj:,.0f} GJ</b> / 월간 계획 <b>{plan_month_gj:,.0f} GJ</b><br>
+                            ➡️ 월간 계획 대비 <span style="font-size:24px;font-weight:800;color:{color};">{exp_rate:.1f}%</span>
+                            <span style="color:#666;">({exp_gj - plan_month_gj:+,.0f} GJ)</span>
+                            </div></div>""", unsafe_allow_html=True)
         else:
             st.info("비교할 누적 데이터가 없습니다.")
         
