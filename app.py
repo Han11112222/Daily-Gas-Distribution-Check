@@ -507,7 +507,7 @@ def kpi_card(label: str, rate: float, value_txt: str, delta_val: float, plan_txt
     return (
         f'<div style="background:{bg};border-radius:10px;padding:18px 20px;min-height:200px;display:flex;'
         f'justify-content:space-between;align-items:center;gap:12px;">'
-        f'<div><div style="font-size:14px;line-height:1.3;color:#31333F;">{label} {rate:.1f}%</div>'
+        f'<div><div style="font-size:14px;line-height:1.3;color:#31333F;">{label} <span style="font-size:16.8px;">{rate:.1f}%</span></div>'
         f'<div style="font-size:36px;line-height:1.3;color:#31333F;margin-top:6px;">{value_txt}</div>'
         f'<div style="margin-top:6px;"><span style="font-size:14px;color:{d_color};background:{d_bg};'
         f'border-radius:12px;padding:2px 8px;">{arrow} {delta_val:+,.0f} GJ</span></div>'
@@ -1190,7 +1190,8 @@ def run_tab1_management():
         st.markdown(kpi_card("일간 달성률", rate_gj, f"{int(current_val_gj):,} GJ", diff_gj,
                              f"계획: {int(plan_val_gj):,} GJ", ABN_BG[kind_d], temp_html), unsafe_allow_html=True)
         if rank_text:
-            st.markdown(f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span><br><span style='font-size: 150%; color: black;'>(2014년 1월 1일 이후 랭킹)</span>", unsafe_allow_html=True)
+            if st.toggle("랭킹확인", value=False, key="show_rank"):   # 기본: 비활성화
+                st.markdown(f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span><br><span style='font-size: 150%; color: black;'>(2014년 1월 1일 이후 랭킹)</span>", unsafe_allow_html=True)
             if is_top_rank:
                 st.balloons()
                 st.toast("🎉 축하합니다! 역대 최고 공급량(1위)을 달성했습니다! 🎆")
