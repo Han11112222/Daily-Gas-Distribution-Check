@@ -631,22 +631,15 @@ def plan_temp_3yr(ts, date):
 
 
 def effect_segments(model, t_plan, t_act):
-    """실적 기온 → 계획 기온 사이를 5℃ 구간 경계로 나누고, 구간마다 (기온 변화 × 그 구간의 1℃당 변화량)을 계산.
-    반환: (구간 리스트[실적→계획 순서], 기온효과 합계 GJ). 계획보다 추우면 +, 따뜻하면 −"""
-    lo_t, hi_t = sorted([float(t_act), float(t_plan)])
-    sign = 1.0 if t_plan > t_act else -1.0
-    segs, cur = [], lo_t
-    while cur < hi_t - 1e-9:
-        b_lo = float(np.floor(cur / 5.0 + 1e-9) * 5.0)
-        nxt = min(hi_t, b_lo + 5.0)
-        bl = min(max(b_lo, model["xmin"]), model["xmax"] - 5.0)
-        slope = heat_band_mean(model, bl, bl + 5.0) / 1000.0     # GJ/℃ (C 요약표와 같은 값)
-        segs.append(dict(lo=cur, hi=nxt, band=(b_lo, b_lo + 5.0), dT=nxt - cur, slope=slope,
-                         eff=sign * (nxt - cur) * slope))
-        cur = nxt
-    if sign < 0:                      # 실적이 더 따뜻하면 높은 기온 → 낮은 기온 순으로 표시
-        segs = segs[::-1]
-    return segs, sum(sg["eff"] for sg in segs)
+    """실적 기온이 속한 5℃ 구간(예: 8.7℃ → 5~10℃)의 1℃당 변화량 하나만 사용해 (기온 차이 × 변화량)을 계산.
+    계획보다 추우면 +, 따뜻하면 −. 반환: (구간 리스트[1개], 기온효과 GJ)"""
+    t_act, t_plan = float(t_act), float(t_plan)
+    b_lo = float(np.floor(t_act / 5.0 + 1e-9) * 5.0)
+    bl = min(max(b_lo, model["xmin"]), model["xmax"] - 5.0)
+    slope = heat_band_mean(model, bl, bl + 5.0) / 1000.0      # GJ/℃ (C 요약표와 같은 값)
+    dt = t_plan - t_act
+    seg = dict(lo=min(t_act, t_plan), hi=max(t_act, t_plan), band=(b_lo, b_lo + 5.0), dT=abs(dt), slope=slope, eff=dt * slope)
+    return [seg], dt * slope
 
 
 def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
@@ -668,7 +661,7 @@ def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
 
     word = "많이" if diff >= 0 else "적게"
     st.markdown(f"**{target_date.month}/{target_date.day}** 공급은 계획보다 **{abs(diff):,.0f} GJ {word}** 나갔습니다 "
-                f"({act_d / plan_d * 100:.1f}%). 이 중 **기온 때문에 약 {abs(eff):,.0f} GJ "
+                f"({act_d / plan_d * 100:.1f}%). 기온 영향으로 **약 {abs(eff):,.0f} GJ "
                 f"{'증가' if eff >= 0 else '감소'}**했습니다.")
     share = f" (전체 증감의 약 {eff / diff * 100:.0f}%)" if diff != 0 and eff * diff > 0 else ""
     rows = [
