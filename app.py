@@ -678,13 +678,15 @@ def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
         ("기온 효과", f"{abs(dt):.1f}℃ × {avg_slope:,.0f} GJ/℃ ≈ <b>{eff:+,.0f} GJ</b>{share}"),
         ("기온 외 효과", f"{diff:,.0f} − ({eff:,.0f}) ≈ <b>{other:+,.0f} GJ</b>"),
     ]
+    def _bg(label):    # 기온 효과 줄은 푸른색 배경으로 강조
+        return "background:#D4E6FF;" if label == "기온 효과" else ""
     tr = "".join(
-        f"<tr><td style='padding:10px 8px;border-bottom:1px solid #eee;font-weight:600;white-space:nowrap;'>{a}</td>"
+        f"<tr style='{_bg(a)}'><td style='padding:10px 8px;border-bottom:1px solid #eee;font-weight:600;white-space:nowrap;'>{a}</td>"
         f"<td style='padding:10px 8px;border-bottom:1px solid #eee;'>{b}</td></tr>" for a, b in rows)
     st.markdown(
         "<table style='width:100%;border-collapse:collapse;font-size:15px;'>"
-        "<thead><tr><th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;'>항목</th>"
-        "<th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;'>값</th></tr></thead>"
+        "<thead><tr><th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;background:#F0F2F6;'>항목</th>"
+        "<th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;background:#F0F2F6;'>값</th></tr></thead>"
         f"<tbody>{tr}</tbody></table>", unsafe_allow_html=True)
 
     # 계산 과정 (엑셀표처럼 구간별로 곱해서 더함)
