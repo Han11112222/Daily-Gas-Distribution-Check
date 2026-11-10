@@ -663,22 +663,26 @@ def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
     st.markdown(f"**{target_date.month}/{target_date.day}** 공급은 계획보다 **{abs(diff):,.0f} GJ {word}** 나갔습니다 "
                 f"({act_d / plan_d * 100:.1f}%). 기온 영향으로 **약 {abs(eff):,.0f} GJ "
                 f"{'증가' if eff >= 0 else '감소'}**했습니다.")
-    rows = [
-        ("계획 / 실적", f"{plan_d:,.0f} → {act_d:,.0f} GJ ({diff:+,.0f})"),
-        ("기온", f"계획 {t_plan:.1f}℃, 실적 {t_act:.1f}℃ ({abs(dt):.1f}℃ 차이)"),
-        ("1℃당 변화량", f"약 {avg_slope:,.0f} GJ/℃"),
-        ("기온 효과", f"{abs(dt):.1f}℃ × {avg_slope:,.0f} GJ/℃ ≈ <b>{eff:+,.0f} GJ</b>"),
-        ("기온 외 효과", f"{diff:,.0f} − ({eff:,.0f}) ≈ <b>{other:+,.0f} GJ</b>"),
-    ]
-    def _bg(label):    # 기온 효과 줄은 푸른색 배경으로 강조
-        return "background:#D4E6FF;" if label == "기온 효과" else ""
-    tr = "".join(
-        f"<tr style='{_bg(a)}'><td style='padding:10px 8px;border-bottom:1px solid #eee;font-weight:600;white-space:nowrap;'>{a}</td>"
-        f"<td style='padding:10px 8px;border-bottom:1px solid #eee;'>{b}</td></tr>" for a, b in rows)
+    P = "padding:10px 8px;border-bottom:1px solid #eee;"
+    TH = "padding:10px 8px;border-bottom:2px solid #ddd;background:#F0F2F6;"
+    def _row(label, cells, bg=""):
+        return f"<tr style='{bg}'><td style='{P}font-weight:600;white-space:nowrap;'>{label}</td>{cells}</tr>"
+    def _one(text):      # 계획~비고 칸을 합쳐 한 줄로 표시
+        return f"<td colspan='3' style='{P}'>{text}</td>"
+    def _cell(text, align="left"):
+        return f"<td style='{P}text-align:{align};'>{text}</td>"
+    tr = (
+        _row("공급량", _cell(f"{plan_d:,.0f} GJ") + _cell(f"{act_d:,.0f} GJ") +
+             _cell(f"{diff:+,.0f} GJ ({act_d / plan_d * 100:.1f}%)"))
+        + _row("기온", _cell(f"{t_plan:.1f}℃") + _cell(f"{t_act:.1f}℃") + _cell(f"{abs(dt):.1f}℃ 차이"))
+        + _row("1℃당 변화량", _one(f"약 {avg_slope:,.0f} GJ/℃"))
+        + _row("기온 효과", _one(f"{abs(dt):.1f}℃ × {avg_slope:,.0f} GJ/℃ ≈ <b>{eff:+,.0f} GJ</b>"), "background:#D4E6FF;")
+        + _row("기온 외 효과", _one(f"{diff:,.0f} − ({eff:,.0f}) ≈ <b>{other:+,.0f} GJ</b>"))
+    )
     st.markdown(
         "<table style='width:100%;border-collapse:collapse;font-size:15px;'>"
-        "<thead><tr><th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;background:#F0F2F6;'>항목</th>"
-        "<th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;background:#F0F2F6;'>값</th></tr></thead>"
+        f"<thead><tr><th style='text-align:left;{TH}'>항목</th><th style='text-align:left;{TH}'>계획</th>"
+        f"<th style='text-align:left;{TH}'>실적</th><th style='text-align:left;{TH}'>비고</th></tr></thead>"
         f"<tbody>{tr}</tbody></table>", unsafe_allow_html=True)
 
     # 계산 과정: 실적 기온 구간 값(표에 사용) + 계획 기온 구간 값(참고) 비교
