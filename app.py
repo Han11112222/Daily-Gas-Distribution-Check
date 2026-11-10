@@ -2327,10 +2327,17 @@ def parse_contract_excel(file_bytes: bytes):
     if not rows:
         return None
 
+    # '수정'(수정본) 행은 업종 행이 아니므로 따로 분리
+    rev_key = next((k for k in rows if "수정" in k), None)
+    revised_vals = rows.pop(rev_key) if rev_key else None
     detail = pd.DataFrame(rows, index=range(1, 13)).T
     total_key = next((k for k in rows if k == "합계"), None)
     total = detail.loc[total_key] if total_key else detail.sum()
     detail_only = detail.drop(index=total_key) if total_key else detail
+    revised = None
+    if revised_vals is not None:
+        revised = pd.Series(revised_vals, index=range(1, 13), dtype=float)
+        revised = revised.fillna(pd.Series(total.values, index=range(1, 13), dtype=float))   # 빈 칸은 원본 값 사용
 
     year, company = None, ""
     for i in range(min(hdr, 8)):
@@ -2341,7 +2348,7 @@ def parse_contract_excel(file_bytes: bytes):
                 year = int(m.group(1))
             if "회사명" in t:
                 company = t.split(":")[-1].strip()
-    return dict(total=total.astype(float), detail=detail_only, year=year, company=company, sheet=sheet)
+    return dict(total=total.astype(float), detail=detail_only, year=year, company=company, sheet=sheet, revised=revised)
 
 
 @st.cache_data(show_spinner=False, ttl=600)
@@ -2376,7 +2383,7 @@ def load_monthly_m3_history():
 
 
 def build_contract_figure(contract: pd.Series, hist: pd.DataFrame, mx: pd.Series, mn: pd.Series, out_mask: pd.Series,
-                          label: str) -> go.Figure:
+                          label: str, revised: Optional[pd.Series] = None, rev_out: Optional[pd.Series] = None) -> go.Figure:
     months = [f"{m}월" for m in range(1, 13)]
     fig = go.Figure()
     # 과거 연도별 꺾은선 (얇은 파스텔)
@@ -2400,6 +2407,18 @@ def build_contract_figure(contract: pd.Series, hist: pd.DataFrame, mx: pd.Series
                              text=[f"{v:,.0f}" for v in contract.values], textposition="top center",
                              textfont=dict(size=11, color="#111827"),
                              hovertemplate="%{y:,.0f} 천㎥<extra>" + label + "</extra>"))
+    if revised is not None:   # 수정본(엑셀 '수정' 행): 주황 실선
+        fig.add_trace(go.Scatter(x=months, y=revised.values, mode="lines+markers+text", name="수정본",
+                                 line=dict(color="#F5A800", width=3.6, shape="spline", smoothing=0.5),
+                                 marker=dict(size=9, color="#F5A800", line=dict(color="white", width=2)),
+                                 text=[f"{v:,.0f}" for v in revised.values], textposition="bottom center",
+                                 textfont=dict(size=11, color="#B97A00"),
+                                 hovertemplate="%{y:,.0f} 천㎥<extra>수정본</extra>"))
+        if rev_out is not None and rev_out.any():
+            fig.add_trace(go.Scatter(x=[months[m - 1] for m in rev_out.index[rev_out]], y=revised[rev_out].values,
+                                     mode="markers", name="수정본 범위 이탈",
+                                     marker=dict(size=16, symbol="x", color="#B71C1C", line=dict(width=3, color="#B71C1C")),
+                                     hoverinfo="skip"))
     if out_mask.any():
         fig.add_trace(go.Scatter(x=[months[m - 1] for m in out_mask.index[out_mask]], y=contract[out_mask].values,
                                  mode="markers", name="범위 이탈",
@@ -2472,18 +2491,32 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
     under = contract < mn
     out_mask = over | under
 
+    revised = cd.get("revised")
+    rev_over = rev_under = rev_out = None
+    if revised is not None:
+        revised = revised.copy()
+        revised.index = range(1, 13)
+        rev_over, rev_under = revised > mx, revised < mn
+        rev_out = rev_over | rev_under
+
     with c2:
         st.markdown(f"<div style='padding-top:28px;font-size:14px;color:#666;'>"
                     f"{cd['company'] or ''} · {label} (단위: 천N㎥) vs 과거 {len(sel_years)}개 연도 "
                     f"({sel_years[0]}~{sel_years[-1]}년) 실적(천m³) · 출처: {src}</div>", unsafe_allow_html=True)
 
-    if out_mask.any():
-        bad = ", ".join(f"{m}월({'초과' if over[m] else '미달'})" for m in out_mask.index[out_mask])
-        st.error(f"🚨 과거 {len(sel_years)}년 최대·최소 범위를 벗어난 월이 있습니다: {bad}")
-    else:
-        st.success(f"✅ 1~12월 약정물량이 모두 과거 {len(sel_years)}년 최대·최소 범위 안에 있습니다.")
+    def _verdict(name, o_mask, o_over):
+        if o_mask.any():
+            bad = ", ".join(f"{m}월({'초과' if o_over[m] else '미달'})" for m in o_mask.index[o_mask])
+            st.error(f"🚨 {name}: 과거 {len(sel_years)}년 최대·최소 범위를 벗어난 월이 있습니다: {bad}")
+        else:
+            st.success(f"✅ {name}: 1~12월이 모두 과거 {len(sel_years)}년 최대·최소 범위 안에 있습니다.")
 
-    st.plotly_chart(build_contract_figure(contract, hist, mx, mn, out_mask, label), use_container_width=True,
+    _verdict("원본", out_mask, over)
+    if revised is not None:
+        _verdict("수정본", rev_out, rev_over)
+
+    st.plotly_chart(build_contract_figure(contract, hist, mx, mn, out_mask, label, revised, rev_out),
+                    use_container_width=True,
                     key=f"{key}_chart")
 
     cmp_df = pd.DataFrame({
@@ -2498,10 +2531,17 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
     tot = {"월": "합계", f"{label}(천㎥)": contract.sum(), "과거 최소(천㎥)": mn.sum(),
            "과거 평균(천㎥)": avg.sum(), "과거 최대(천㎥)": mx.sum(), "판정": "", "벗어난 양(천㎥)": np.nan,
            "평균 대비(%)": (contract.sum() / avg.sum() - 1) * 100}
+    if revised is not None:   # 수정본 열 추가 (원본 옆에)
+        pos = list(cmp_df.columns).index("벗어난 양(천㎥)") + 1
+        cmp_df.insert(pos, "수정본(천㎥)", revised.values)
+        cmp_df.insert(pos + 1, "수정본 판정",
+                      ["최대 초과" if rev_over[m] else ("최소 미달" if rev_under[m] else "범위 내") for m in range(1, 13)])
+        cmp_df.insert(pos + 2, "수정-원본(천㎥)", (revised - contract).values)
+        tot.update({"수정본(천㎥)": revised.sum(), "수정본 판정": "", "수정-원본(천㎥)": (revised - contract).sum()})
     show_df = pd.concat([cmp_df, pd.DataFrame([tot])], ignore_index=True)
 
     def _hl(row):
-        if row["판정"] in ("최대 초과", "최소 미달"):
+        if row["판정"] in ("최대 초과", "최소 미달") or row.get("수정본 판정") in ("최대 초과", "최소 미달"):
             return ["background-color: #FFD6D6; font-weight: bold"] * len(row)
         if row["월"] == "합계":
             return ["background-color: #F0F2F6; font-weight: bold"] * len(row)
