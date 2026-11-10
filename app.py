@@ -630,15 +630,27 @@ def plan_temp_3yr(ts, date):
     return float(v.mean()) if len(v) else np.nan
 
 
-def heat_band_for(model, t):
-    """기온 t가 속한 5℃ 구간(예: 5~10℃)과 그 구간의 1℃당 평균 변화량(GJ/℃) — C 요약표의 값과 동일"""
-    lo = float(np.floor(t / 5.0) * 5.0)
-    lo = min(max(lo, model["xmin"]), model["xmax"] - 5.0)
-    return lo, lo + 5.0, heat_band_mean(model, lo, lo + 5.0) / 1000.0
+def effect_segments(model, t_plan, t_act):
+    """실적 기온 → 계획 기온 사이를 5℃ 구간 경계로 나누고, 구간마다 (기온 변화 × 그 구간의 1℃당 변화량)을 계산.
+    반환: (구간 리스트[실적→계획 순서], 기온효과 합계 GJ). 계획보다 추우면 +, 따뜻하면 −"""
+    lo_t, hi_t = sorted([float(t_act), float(t_plan)])
+    sign = 1.0 if t_plan > t_act else -1.0
+    segs, cur = [], lo_t
+    while cur < hi_t - 1e-9:
+        b_lo = float(np.floor(cur / 5.0 + 1e-9) * 5.0)
+        nxt = min(hi_t, b_lo + 5.0)
+        bl = min(max(b_lo, model["xmin"]), model["xmax"] - 5.0)
+        slope = heat_band_mean(model, bl, bl + 5.0) / 1000.0     # GJ/℃ (C 요약표와 같은 값)
+        segs.append(dict(lo=cur, hi=nxt, band=(b_lo, b_lo + 5.0), dT=nxt - cur, slope=slope,
+                         eff=sign * (nxt - cur) * slope))
+        cur = nxt
+    if sign < 0:                      # 실적이 더 따뜻하면 높은 기온 → 낮은 기온 순으로 표시
+        segs = segs[::-1]
+    return segs, sum(sg["eff"] for sg in segs)
 
 
 def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
-    """일간 계획 대비 증감을 '기온 효과'와 '기온 외 효과'로 나눠 간단한 표로 보여준다"""
+    """당일 계획 대비 증감을 '기온 효과'와 '기온 외 효과'로 나눠 간단한 표로 보여준다"""
     st.markdown("#### 🌡️ 계획 대비 증감, 왜 그럴까요?")
     if model is None:
         st.info("기온–공급량 관계를 계산할 과거 자료가 부족합니다.")
@@ -650,21 +662,20 @@ def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
     t_act = float(day_temp)
     diff = act_d - plan_d
     dt = t_plan - t_act                       # +이면 계획보다 더 추웠음
-    lo, hi, slope = heat_band_for(model, t_act)
-    eff = dt * slope                          # 기온 때문에 늘어난(+)/줄어든(−) 양
+    segs, eff = effect_segments(model, t_plan, t_act)
     other = diff - eff
+    avg_slope = eff / dt if abs(dt) >= 0.05 else (segs[0]["slope"] if segs else 0.0)
 
     word = "많이" if diff >= 0 else "적게"
     st.markdown(f"**{target_date.month}/{target_date.day}** 공급은 계획보다 **{abs(diff):,.0f} GJ {word}** 나갔습니다 "
                 f"({act_d / plan_d * 100:.1f}%). 이 중 **기온 때문에 약 {abs(eff):,.0f} GJ "
                 f"{'증가' if eff >= 0 else '감소'}**했습니다.")
-    temp_word = "더 추웠음" if dt > 0 else ("더 따뜻했음" if dt < 0 else "같음")
     share = f" (전체 증감의 약 {eff / diff * 100:.0f}%)" if diff != 0 and eff * diff > 0 else ""
     rows = [
         ("계획 / 실적", f"{plan_d:,.0f} → {act_d:,.0f} GJ ({diff:+,.0f})"),
-        ("기온", f"계획 {t_plan:.1f}℃, 실적 {t_act:.1f}℃ → {abs(dt):.1f}℃ {temp_word}"),
-        (f"1℃당 변화량 ({lo:g}~{hi:g}℃ 구간)", f"약 {slope:,.0f} GJ/℃"),
-        ("기온 효과", f"{abs(dt):.1f} × {slope:,.0f} ≈ <b>{eff:+,.0f} GJ</b>{share}"),
+        ("기온", f"계획 {t_plan:.1f}℃, 실적 {t_act:.1f}℃ ({abs(dt):.1f}℃ 차이)"),
+        ("1℃당 변화량", f"약 {avg_slope:,.0f} GJ/℃"),
+        ("기온 효과", f"{abs(dt):.1f}℃ × {avg_slope:,.0f} GJ/℃ ≈ <b>{eff:+,.0f} GJ</b>{share}"),
         ("기온 외 효과", f"{diff:,.0f} − ({eff:,.0f}) ≈ <b>{other:+,.0f} GJ</b>"),
     ]
     tr = "".join(
@@ -675,8 +686,31 @@ def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
         "<thead><tr><th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;'>항목</th>"
         "<th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;'>값</th></tr></thead>"
         f"<tbody>{tr}</tbody></table>", unsafe_allow_html=True)
+
+    # 계산 과정 (엑셀표처럼 구간별로 곱해서 더함)
+    with st.expander("계산 과정 보기 (구간별 곱셈)"):
+        th = "padding:8px;border-bottom:2px solid #ddd;text-align:right;"
+        td = "padding:8px;border-bottom:1px solid #eee;text-align:right;"
+        body = ""
+        for sg in segs:
+            a_t, b_t = (sg["lo"], sg["hi"]) if t_plan > t_act else (sg["hi"], sg["lo"])
+            body += (f"<tr><td style='{td}text-align:left;'>{a_t:.1f}℃ → {b_t:.1f}℃ "
+                     f"({sg['band'][0]:g}~{sg['band'][1]:g}℃ 구간)</td><td style='{td}'>{sg['dT']:.1f}℃</td>"
+                     f"<td style='{td}'>{sg['slope']:,.0f} GJ/℃</td><td style='{td}'>{sg['eff']:+,.0f} GJ</td></tr>")
+        tot = "font-weight:700;background:#F0F2F6;"
+        body += (f"<tr style='{tot}'><td style='{td}text-align:left;'>기온 효과 합계</td><td style='{td}'>{abs(dt):.1f}℃</td>"
+                 f"<td style='{td}'>평균 {avg_slope:,.0f} GJ/℃</td><td style='{td}'>{eff:+,.0f} GJ</td></tr>"
+                 f"<tr><td style='{td}text-align:left;'>기온 외 효과 (나머지)</td><td style='{td}'></td><td style='{td}'></td>"
+                 f"<td style='{td}'>{other:+,.0f} GJ</td></tr>"
+                 f"<tr style='{tot}'><td style='{td}text-align:left;'>계획 대비 증감</td><td style='{td}'></td><td style='{td}'></td>"
+                 f"<td style='{td}'>{diff:+,.0f} GJ</td></tr>")
+        st.markdown(
+            "<table style='width:100%;border-collapse:collapse;font-size:14px;'><thead><tr>"
+            f"<th style='{th}text-align:left;'>구분</th><th style='{th}'>기온 변화</th>"
+            f"<th style='{th}'>× 1℃당 변화량</th><th style='{th}'>= 증감</th></tr></thead><tbody>{body}</tbody></table>",
+            unsafe_allow_html=True)
     st.caption("※ 계획 기온 = 일일계획 기준(최근 3년 같은 날 평균기온). 1℃당 변화량은 아래 '1도 변화에 따른 공급량 변화'의 "
-               "해당 구간 값과 같습니다. 기온 외 효과에는 요일·휴일, 고객 증가, 계획 오차 등이 포함됩니다.")
+               "구간별 값과 같습니다. 기온 외 효과에는 요일·휴일, 고객 증가, 계획 오차 등이 포함됩니다.")
 
 
 # ─────────────────────────────────────────────────────────
@@ -1411,7 +1445,8 @@ def run_tab1_management():
                        heat_band_mean(heat_model, heat_model["mean_temp"], heat_model["mean_temp"])),
                       ("−5~0℃", heat_band_mean(heat_model, -5, 0)),
                       ("0~5℃", heat_band_mean(heat_model, 0, 5)),
-                      ("5~10℃", heat_band_mean(heat_model, 5, 10))]
+                      ("5~10℃", heat_band_mean(heat_model, 5, 10)),
+                      ("10~15℃", heat_band_mean(heat_model, 10, 15))]
             md = f"**Polynomial Regression (degree 3)** **{heat_model['eq']}**\n\n"
             for nm, v in rows_c:
                 md += f"- **Supply ↑ per −1°C ({nm})** : **{v:,.0f} MJ/℃, {v / cv:,.0f} Nm³/℃** (단위열량 {cv:.3f} MJ/Nm³ 적용)\n"
