@@ -697,14 +697,14 @@ def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
             f"<td style='{td}'>{t_act:.1f}℃</td><td style='{td}'>{a_lo:g}~{a_hi:g}℃</td>"
             f"<td style='{td}'>{slope_a:,.0f} GJ/℃</td>"
             f"<td style='{td}'>{abs(dt):.1f}℃ × {slope_a:,.0f} = {eff:+,.0f} GJ</td></tr>"
+            f"<tr style='background:#F0F2F6;font-weight:700;'><td style='{td}text-align:left;'>계획 대비 증감</td>"
+            f"<td style='{td}'></td><td style='{td}'></td><td style='{td}'></td><td style='{td}'>{diff:+,.0f} GJ</td></tr>"
             f"<tr><td style='{td}text-align:left;'>계획 기온 기준 (참고)</td>"
             f"<td style='{td}'>{t_plan:.1f}℃</td><td style='{td}'>{p_lo:g}~{p_lo + 5:g}℃</td>"
             f"<td style='{td}'>{slope_p:,.0f} GJ/℃</td>"
             f"<td style='{td}'>{abs(dt):.1f}℃ × {slope_p:,.0f} = {eff_p:+,.0f} GJ</td></tr>"
             f"<tr><td style='{td}text-align:left;'>기온 외 효과 (나머지)</td><td style='{td}'></td><td style='{td}'></td>"
-            f"<td style='{td}'></td><td style='{td}'>{other:+,.0f} GJ</td></tr>"
-            f"<tr style='background:#F0F2F6;font-weight:700;'><td style='{td}text-align:left;'>계획 대비 증감</td>"
-            f"<td style='{td}'></td><td style='{td}'></td><td style='{td}'></td><td style='{td}'>{diff:+,.0f} GJ</td></tr>")
+            f"<td style='{td}'></td><td style='{td}'>{other:+,.0f} GJ</td></tr>")
         st.markdown(
             "<table style='width:100%;border-collapse:collapse;font-size:14px;'><thead><tr>"
             f"<th style='{th}text-align:left;'>구분</th><th style='{th}'>기온</th><th style='{th}'>기온 구간</th>"
