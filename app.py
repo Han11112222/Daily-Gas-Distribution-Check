@@ -630,97 +630,53 @@ def plan_temp_3yr(ts, date):
     return float(v.mean()) if len(v) else np.nan
 
 
-def temp_effect(model, t_plan, t_act):
-    """(계획기온 → 실적기온) 기온 변화에 따른 공급량 변화(GJ)와 1℃당 평균 변화량(GJ/℃). 추우면 +"""
-    eff = float(heat_q(model, t_act) - heat_q(model, t_plan)) / 1000.0
-    dt = t_plan - t_act
-    slope = eff / dt if abs(dt) >= 0.05 else float(-(model["b"] + 2 * model["c"] * t_act + 3 * model["d"] * t_act ** 2)) / 1000.0
-    return eff, slope
+def heat_band_for(model, t):
+    """기온 t가 속한 5℃ 구간(예: 5~10℃)과 그 구간의 1℃당 평균 변화량(GJ/℃) — C 요약표의 값과 동일"""
+    lo = float(np.floor(t / 5.0) * 5.0)
+    lo = min(max(lo, model["xmin"]), model["xmax"] - 5.0)
+    return lo, lo + 5.0, heat_band_mean(model, lo, lo + 5.0) / 1000.0
 
 
-def render_temp_effect_box(model, ts, df, target_date, day_temp, act_d, plan_d, act_m, plan_m):
-    """계획 대비 증감을 '기온 효과'와 '기온 외 효과'로 나눠 간단한 표로 보여준다"""
+def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
+    """일간 계획 대비 증감을 '기온 효과'와 '기온 외 효과'로 나눠 간단한 표로 보여준다"""
     st.markdown("#### 🌡️ 계획 대비 증감, 왜 그럴까요?")
     if model is None:
         st.info("기온–공급량 관계를 계산할 과거 자료가 부족합니다.")
         return
+    t_plan = plan_temp_3yr(ts, target_date)
+    if pd.isna(day_temp) or pd.isna(t_plan) or plan_d <= 0 or act_d <= 0:
+        st.info("조회일의 계획·실적·평균기온 중 비어 있는 값이 있어 설명을 만들 수 없습니다.")
+        return
+    t_act = float(day_temp)
+    diff = act_d - plan_d
+    dt = t_plan - t_act                       # +이면 계획보다 더 추웠음
+    lo, hi, slope = heat_band_for(model, t_act)
+    eff = dt * slope                          # 기온 때문에 늘어난(+)/줄어든(−) 양
+    other = diff - eff
 
-    def fmt_gj(v, sign=False):
-        return f"{v:+,.0f}" if sign else f"{v:,.0f}"
-
-    def temp_word(dt):    # dt = 실적 − 계획
-        return "더 추웠음" if dt < 0 else ("더 따뜻했음" if dt > 0 else "같음")
-
-    # ── 일간 ──
-    t_plan_d = plan_temp_3yr(ts, target_date)
-    diff_d = act_d - plan_d
-    if pd.notna(day_temp) and pd.notna(t_plan_d) and act_d > 0:
-        eff_d, slope_d = temp_effect(model, t_plan_d, float(day_temp))
-        dtd = float(day_temp) - t_plan_d
-        d_temp = f"계획 {t_plan_d:.1f}℃ → 실적 {float(day_temp):.1f}℃ ({abs(dtd):.1f}℃ {temp_word(dtd)})"
-        d_slope = f"약 {slope_d:,.0f} GJ/℃"
-        share = f" (전체 증감의 약 {eff_d / diff_d * 100:.0f}%)" if diff_d != 0 and eff_d * diff_d > 0 else ""
-        d_eff = f"{abs(dtd):.1f}℃ × {slope_d:,.0f} ≈ <b>{fmt_gj(eff_d, True)} GJ</b>{share}"
-        d_other = f"{fmt_gj(diff_d)} − ({fmt_gj(eff_d)}) ≈ <b>{fmt_gj(diff_d - eff_d, True)} GJ</b>"
-    else:
-        eff_d = None
-        d_temp = d_slope = d_eff = d_other = "-"
-
-    # ── 월간 누적 ──
-    m = df[(df["날짜"].dt.year == target_date.year) & (df["날짜"].dt.month == target_date.month) &
-           (df["날짜"] <= target_date) & (df["실적(GJ)"] > 0)]
-    eff_m, sum_dt, ta_l, tp_l = 0.0, 0.0, [], []
-    for _, r in m.iterrows():
-        ta = pd.to_numeric(r["평균기온(℃)"], errors="coerce")
-        tp = plan_temp_3yr(ts, r["날짜"])
-        if pd.isna(ta) or pd.isna(tp):
-            continue
-        e, _ = temp_effect(model, tp, float(ta))
-        eff_m += e
-        sum_dt += (tp - float(ta))
-        ta_l.append(float(ta)); tp_l.append(tp)
-    diff_m = act_m - plan_m
-    if ta_l:
-        n = len(ta_l)
-        dtm = float(np.mean(ta_l)) - float(np.mean(tp_l))
-        slope_m = eff_m / sum_dt if abs(sum_dt) >= 0.05 else np.nan
-        m_temp = (f"계획 {np.mean(tp_l):.1f}℃ → 실적 {np.mean(ta_l):.1f}℃ (하루 평균 {abs(dtm):.1f}℃ {temp_word(dtm)})")
-        m_slope = f"약 {slope_m:,.0f} GJ/℃ (하루 기준)" if pd.notna(slope_m) else "-"
-        share = f" (전체 증감의 약 {eff_m / diff_m * 100:.0f}%)" if diff_m != 0 and eff_m * diff_m > 0 else ""
-        m_eff = (f"{abs(dtm):.1f}℃ × {slope_m:,.0f} × {n}일 ≈ <b>{fmt_gj(eff_m, True)} GJ</b>{share}"
-                 if pd.notna(slope_m) else f"<b>{fmt_gj(eff_m, True)} GJ</b>")
-        m_other = f"{fmt_gj(diff_m)} − ({fmt_gj(eff_m)}) ≈ <b>{fmt_gj(diff_m - eff_m, True)} GJ</b>"
-    else:
-        m_temp = m_slope = m_eff = m_other = "-"
-
-    word = "많이" if diff_d >= 0 else "적게"
-    head = f"**{target_date.month}/{target_date.day}** 공급은 계획보다 **{abs(diff_d):,.0f} GJ {word}** 나갔습니다 ({act_d / plan_d * 100:.1f}%)." \
-        if plan_d > 0 else ""
-    if head and eff_d is not None:
-        head += f" 이 중 **기온 때문에 약 {abs(eff_d):,.0f} GJ {'증가' if eff_d >= 0 else '감소'}**했습니다."
-    if head:
-        st.markdown(head)
-
+    word = "많이" if diff >= 0 else "적게"
+    st.markdown(f"**{target_date.month}/{target_date.day}** 공급은 계획보다 **{abs(diff):,.0f} GJ {word}** 나갔습니다 "
+                f"({act_d / plan_d * 100:.1f}%). 이 중 **기온 때문에 약 {abs(eff):,.0f} GJ "
+                f"{'증가' if eff >= 0 else '감소'}**했습니다.")
+    temp_word = "더 추웠음" if dt > 0 else ("더 따뜻했음" if dt < 0 else "같음")
+    share = f" (전체 증감의 약 {eff / diff * 100:.0f}%)" if diff != 0 and eff * diff > 0 else ""
     rows = [
-        ("계획 / 실적", f"{plan_d:,.0f} → {act_d:,.0f} GJ ({fmt_gj(diff_d, True)})",
-         f"{plan_m:,.0f} → {act_m:,.0f} GJ ({fmt_gj(diff_m, True)})"),
-        ("기온 (계획 → 실적)", d_temp, m_temp),
-        ("1℃당 변화량", d_slope, m_slope),
-        ("기온 효과", d_eff, m_eff),
-        ("기온 외 효과 (나머지)", d_other, m_other),
+        ("계획 / 실적", f"{plan_d:,.0f} → {act_d:,.0f} GJ ({diff:+,.0f})"),
+        ("기온", f"계획 {t_plan:.1f}℃, 실적 {t_act:.1f}℃ → {abs(dt):.1f}℃ {temp_word}"),
+        (f"1℃당 변화량 ({lo:g}~{hi:g}℃ 구간)", f"약 {slope:,.0f} GJ/℃"),
+        ("기온 효과", f"{abs(dt):.1f} × {slope:,.0f} ≈ <b>{eff:+,.0f} GJ</b>{share}"),
+        ("기온 외 효과", f"{diff:,.0f} − ({eff:,.0f}) ≈ <b>{other:+,.0f} GJ</b>"),
     ]
     tr = "".join(
         f"<tr><td style='padding:10px 8px;border-bottom:1px solid #eee;font-weight:600;white-space:nowrap;'>{a}</td>"
-        f"<td style='padding:10px 8px;border-bottom:1px solid #eee;'>{b}</td>"
-        f"<td style='padding:10px 8px;border-bottom:1px solid #eee;'>{c}</td></tr>" for a, b, c in rows)
+        f"<td style='padding:10px 8px;border-bottom:1px solid #eee;'>{b}</td></tr>" for a, b in rows)
     st.markdown(
         "<table style='width:100%;border-collapse:collapse;font-size:15px;'>"
         "<thead><tr><th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;'>항목</th>"
-        f"<th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;'>일간 ({target_date.month}/{target_date.day})</th>"
-        f"<th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;'>월간 누적 ({target_date.month}/1~{target_date.day})</th>"
-        f"</tr></thead><tbody>{tr}</tbody></table>", unsafe_allow_html=True)
-    st.caption("※ 계획 기온 = 일일계획 기준(최근 3년 같은 날 평균기온). 1℃당 변화량은 과거 일별 실적으로 구한 기온–공급량 관계입니다. "
-               "기온 외 효과에는 요일·휴일, 고객 증가, 계획 오차 등이 포함됩니다.")
+        "<th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;'>값</th></tr></thead>"
+        f"<tbody>{tr}</tbody></table>", unsafe_allow_html=True)
+    st.caption("※ 계획 기온 = 일일계획 기준(최근 3년 같은 날 평균기온). 1℃당 변화량은 아래 '1도 변화에 따른 공급량 변화'의 "
+               "해당 구간 값과 같습니다. 기온 외 효과에는 요일·휴일, 고객 증가, 계획 오차 등이 포함됩니다.")
 
 
 # ─────────────────────────────────────────────────────────
@@ -1437,8 +1393,31 @@ def run_tab1_management():
         _h = _hist_for_model.dropna(subset=["평균기온(℃)", "val_gj"])
         heat_model = build_heat_model(_h["평균기온(℃)"].to_numpy(float), (_h["val_gj"] * 1000.0).to_numpy(float))
     st.markdown("<br>", unsafe_allow_html=True)
-    render_temp_effect_box(heat_model, ts_abn, df, target_date, day_temp,
-                           current_val_gj, plan_val_gj, a_mtd, p_mtd)
+    render_temp_effect_box(heat_model, ts_abn, target_date, day_temp, current_val_gj, plan_val_gj)
+
+    # ── 설명 박스 바로 아래: 1도 변화에 따른 공급량 변화 (기본: 숨김) ──
+    if st.toggle("1도 변화에 따른 공급량 변화", value=False, key="show_sens"):
+        if heat_model is None:
+            st.info("기온–공급량 관계를 계산할 과거 자료가 부족합니다.")
+        else:
+            _h2 = _hist_for_model.dropna(subset=["평균기온(℃)", "val_gj"])
+            st.subheader("🧊 B. Heating Start / Slowdown — 수요곡선")
+            st.plotly_chart(build_heat_fig_demand(heat_model, _h2["평균기온(℃)"].to_numpy(float),
+                                                  (_h2["val_gj"] * 1000.0).to_numpy(float)),
+                            use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+            st.subheader("🌡️ C. 기온별 공급량 변화량 요약")
+            cv = HEAT_MJ_PER_M3
+            rows_c = [("Total Avg @ " + f"{heat_model['mean_temp']:.1f}℃",
+                       heat_band_mean(heat_model, heat_model["mean_temp"], heat_model["mean_temp"])),
+                      ("−5~0℃", heat_band_mean(heat_model, -5, 0)),
+                      ("0~5℃", heat_band_mean(heat_model, 0, 5)),
+                      ("5~10℃", heat_band_mean(heat_model, 5, 10))]
+            md = f"**Polynomial Regression (degree 3)** **{heat_model['eq']}**\n\n"
+            for nm, v in rows_c:
+                md += f"- **Supply ↑ per −1°C ({nm})** : **{v:,.0f} MJ/℃, {v / cv:,.0f} Nm³/℃** (단위열량 {cv:.3f} MJ/Nm³ 적용)\n"
+            st.markdown(md)
+            st.caption(f"R²={heat_model['r2']:.3f} · 구글시트 일별 실적 전체 기간 기준")
+
 
     # ── [열량 실적 하단] 이상기온 판별 상세 ──
     st.markdown("<br>", unsafe_allow_html=True)
@@ -1577,30 +1556,6 @@ def run_tab1_management():
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df.to_excel(writer, sheet_name='연간', index=False)
     st.download_button("💾 관리 데이터 엑셀 저장", buffer, f"실적데이터_{target_date.strftime('%Y%m%d')}.xlsx")
-
-    # ── 하단: 1도 변화에 따른 공급량 변화 (기본: 숨김) ──
-    st.markdown("---")
-    if st.toggle("1도 변화에 따른 공급량 변화", value=False, key="show_sens"):
-        if heat_model is None:
-            st.info("기온–공급량 관계를 계산할 과거 자료가 부족합니다.")
-        else:
-            _h2 = _hist_for_model.dropna(subset=["평균기온(℃)", "val_gj"])
-            st.subheader("🧊 B. Heating Start / Slowdown — 수요곡선")
-            st.plotly_chart(build_heat_fig_demand(heat_model, _h2["평균기온(℃)"].to_numpy(float),
-                                                  (_h2["val_gj"] * 1000.0).to_numpy(float)),
-                            use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
-            st.subheader("🌡️ C. 기온별 공급량 변화량 요약")
-            cv = HEAT_MJ_PER_M3
-            rows_c = [("Total Avg @ " + f"{heat_model['mean_temp']:.1f}℃",
-                       heat_band_mean(heat_model, heat_model["mean_temp"], heat_model["mean_temp"])),
-                      ("−5~0℃", heat_band_mean(heat_model, -5, 0)),
-                      ("0~5℃", heat_band_mean(heat_model, 0, 5)),
-                      ("5~10℃", heat_band_mean(heat_model, 5, 10))]
-            md = f"**Polynomial Regression (degree 3)** **{heat_model['eq']}**\n\n"
-            for nm, v in rows_c:
-                md += f"- **Supply ↑ per −1°C ({nm})** : **{v:,.0f} MJ/℃, {v / cv:,.0f} Nm³/℃** (단위열량 {cv:.3f} MJ/Nm³ 적용)\n"
-            st.markdown(md)
-            st.caption(f"R²={heat_model['r2']:.3f} · 구글시트 일별 실적 전체 기간 기준")
 
 # ==============================================================================
 # [탭 2] 공급량 분석
