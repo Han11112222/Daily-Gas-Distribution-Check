@@ -663,12 +663,11 @@ def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
     st.markdown(f"**{target_date.month}/{target_date.day}** 공급은 계획보다 **{abs(diff):,.0f} GJ {word}** 나갔습니다 "
                 f"({act_d / plan_d * 100:.1f}%). 기온 영향으로 **약 {abs(eff):,.0f} GJ "
                 f"{'증가' if eff >= 0 else '감소'}**했습니다.")
-    share = f" (전체 증감의 약 {eff / diff * 100:.0f}%)" if diff != 0 and eff * diff > 0 else ""
     rows = [
         ("계획 / 실적", f"{plan_d:,.0f} → {act_d:,.0f} GJ ({diff:+,.0f})"),
         ("기온", f"계획 {t_plan:.1f}℃, 실적 {t_act:.1f}℃ ({abs(dt):.1f}℃ 차이)"),
         ("1℃당 변화량", f"약 {avg_slope:,.0f} GJ/℃"),
-        ("기온 효과", f"{abs(dt):.1f}℃ × {avg_slope:,.0f} GJ/℃ ≈ <b>{eff:+,.0f} GJ</b>{share}"),
+        ("기온 효과", f"{abs(dt):.1f}℃ × {avg_slope:,.0f} GJ/℃ ≈ <b>{eff:+,.0f} GJ</b>"),
         ("기온 외 효과", f"{diff:,.0f} − ({eff:,.0f}) ≈ <b>{other:+,.0f} GJ</b>"),
     ]
     def _bg(label):    # 기온 효과 줄은 푸른색 배경으로 강조
@@ -682,28 +681,44 @@ def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
         "<th style='text-align:left;padding:10px 8px;border-bottom:2px solid #ddd;background:#F0F2F6;'>값</th></tr></thead>"
         f"<tbody>{tr}</tbody></table>", unsafe_allow_html=True)
 
-    # 계산 과정 (엑셀표처럼 구간별로 곱해서 더함)
-    with st.expander("계산 과정 보기 (구간별 곱셈)"):
-        th = "padding:8px;border-bottom:2px solid #ddd;text-align:right;"
+    # 계산 과정: 실적 기온 구간 값(표에 사용) + 계획 기온 구간 값(참고) 비교
+    with st.expander("계산 과정 보기"):
+        sg = segs[0]
+        a_lo, a_hi, slope_a = sg["band"][0], sg["band"][1], sg["slope"]
+        p_lo = float(np.floor(t_plan / 5.0 + 1e-9) * 5.0)
+        pl = min(max(p_lo, model["xmin"]), model["xmax"] - 5.0)
+        slope_p = heat_band_mean(model, pl, pl + 5.0) / 1000.0
+        eff_p = dt * slope_p
+        th = "padding:8px;border-bottom:2px solid #ddd;text-align:right;background:#F0F2F6;"
         td = "padding:8px;border-bottom:1px solid #eee;text-align:right;"
-        body = ""
-        for sg in segs:
-            a_t, b_t = (sg["lo"], sg["hi"]) if t_plan > t_act else (sg["hi"], sg["lo"])
-            body += (f"<tr><td style='{td}text-align:left;'>{a_t:.1f}℃ → {b_t:.1f}℃ "
-                     f"({sg['band'][0]:g}~{sg['band'][1]:g}℃ 구간)</td><td style='{td}'>{sg['dT']:.1f}℃</td>"
-                     f"<td style='{td}'>{sg['slope']:,.0f} GJ/℃</td><td style='{td}'>{sg['eff']:+,.0f} GJ</td></tr>")
-        tot = "font-weight:700;background:#F0F2F6;"
-        body += (f"<tr style='{tot}'><td style='{td}text-align:left;'>기온 효과 합계</td><td style='{td}'>{abs(dt):.1f}℃</td>"
-                 f"<td style='{td}'>평균 {avg_slope:,.0f} GJ/℃</td><td style='{td}'>{eff:+,.0f} GJ</td></tr>"
-                 f"<tr><td style='{td}text-align:left;'>기온 외 효과 (나머지)</td><td style='{td}'></td><td style='{td}'></td>"
-                 f"<td style='{td}'>{other:+,.0f} GJ</td></tr>"
-                 f"<tr style='{tot}'><td style='{td}text-align:left;'>계획 대비 증감</td><td style='{td}'></td><td style='{td}'></td>"
-                 f"<td style='{td}'>{diff:+,.0f} GJ</td></tr>")
+        use = "background:#D4E6FF;font-weight:700;"
+        body = (
+            f"<tr style='{use}'><td style='{td}text-align:left;'>실적 기온 기준 (표에 사용)</td>"
+            f"<td style='{td}'>{t_act:.1f}℃</td><td style='{td}'>{a_lo:g}~{a_hi:g}℃</td>"
+            f"<td style='{td}'>{slope_a:,.0f} GJ/℃</td>"
+            f"<td style='{td}'>{abs(dt):.1f}℃ × {slope_a:,.0f} = {eff:+,.0f} GJ</td></tr>"
+            f"<tr><td style='{td}text-align:left;'>계획 기온 기준 (참고)</td>"
+            f"<td style='{td}'>{t_plan:.1f}℃</td><td style='{td}'>{p_lo:g}~{p_lo + 5:g}℃</td>"
+            f"<td style='{td}'>{slope_p:,.0f} GJ/℃</td>"
+            f"<td style='{td}'>{abs(dt):.1f}℃ × {slope_p:,.0f} = {eff_p:+,.0f} GJ</td></tr>"
+            f"<tr><td style='{td}text-align:left;'>기온 외 효과 (나머지)</td><td style='{td}'></td><td style='{td}'></td>"
+            f"<td style='{td}'></td><td style='{td}'>{other:+,.0f} GJ</td></tr>"
+            f"<tr style='background:#F0F2F6;font-weight:700;'><td style='{td}text-align:left;'>계획 대비 증감</td>"
+            f"<td style='{td}'></td><td style='{td}'></td><td style='{td}'></td><td style='{td}'>{diff:+,.0f} GJ</td></tr>")
         st.markdown(
             "<table style='width:100%;border-collapse:collapse;font-size:14px;'><thead><tr>"
-            f"<th style='{th}text-align:left;'>구분</th><th style='{th}'>기온 변화</th>"
-            f"<th style='{th}'>× 1℃당 변화량</th><th style='{th}'>= 증감</th></tr></thead><tbody>{body}</tbody></table>",
-            unsafe_allow_html=True)
+            f"<th style='{th}text-align:left;'>구분</th><th style='{th}'>기온</th><th style='{th}'>기온 구간</th>"
+            f"<th style='{th}'>1℃당 변화량</th><th style='{th}'>기온 차이 × 변화량 = 기온 효과</th></tr></thead>"
+            f"<tbody>{body}</tbody></table>", unsafe_allow_html=True)
+        if (a_lo, a_hi) != (p_lo, p_lo + 5.0):
+            lo_e, hi_e = sorted([eff, eff_p], key=abs)
+            st.markdown(
+                f"**구간이 다릅니다.** 실적 기온 {t_act:.1f}℃는 **{a_lo:g}~{a_hi:g}℃ 구간**, 계획 기온 {t_plan:.1f}℃는 "
+                f"**{p_lo:g}~{p_lo + 5:g}℃ 구간**입니다. 기온이 낮은 구간일수록 1℃ 내려갈 때 늘어나는 공급량이 커서 "
+                f"({slope_a:,.0f} vs {slope_p:,.0f} GJ/℃), 어느 구간 값을 쓰느냐에 따라 기온 효과가 "
+                f"{abs(lo_e):,.0f} ~ {abs(hi_e):,.0f} GJ로 달라집니다. 이 화면은 **실제 기온 구간** 값을 사용했습니다.")
+        else:
+            st.markdown(f"계획 기온과 실적 기온이 같은 **{a_lo:g}~{a_hi:g}℃ 구간**이라 1℃당 변화량이 같습니다.")
     st.caption("※ 계획 기온 = 일일계획 기준(최근 3년 같은 날 평균기온). 1℃당 변화량은 아래 '1도 변화에 따른 공급량 변화'의 "
                "구간별 값과 같습니다. 기온 외 효과에는 요일·휴일, 고객 증가, 계획 오차 등이 포함됩니다.")
 
