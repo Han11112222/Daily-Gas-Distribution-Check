@@ -422,10 +422,11 @@ def build_abnormal_figure(st_m: dict) -> go.Figure:
     fig = go.Figure()
     fig.add_vrect(x0=lower, x1=upper, fillcolor="#00BFFF", opacity=0.1, layer="below",
                   line_width=1, line_dash="solid", line_color="#00BFFF")
-    fig.add_annotation(x=lower, y=0.9, text=f"<b>하한: {lower:.2f}℃</b>", showarrow=False,
-                       font=dict(color="#00BFFF", size=13), xanchor="right", yanchor="top")
-    fig.add_annotation(x=upper, y=0.9, text=f"<b>상한: {upper:.2f}℃</b>", showarrow=False,
-                       font=dict(color="#00BFFF", size=13), xanchor="left", yanchor="top")
+    # 하한/상한: 소수 1자리, 밴드(네모칸) 위쪽 모서리 안쪽에 표시 (글자 13 → 18)
+    fig.add_annotation(x=lower, y=1, xref="x", yref="paper", text=f"<b>하한 {lower:.1f}℃</b>", showarrow=False,
+                       font=dict(color="#00A3E0", size=18), xanchor="left", yanchor="top", xshift=6, yshift=-4)
+    fig.add_annotation(x=upper, y=1, xref="x", yref="paper", text=f"<b>상한 {upper:.1f}℃</b>", showarrow=False,
+                       font=dict(color="#00A3E0", size=18), xanchor="right", yanchor="top", xshift=-6, yshift=-4)
     fig.add_vline(x=mean5, line=dict(color="#2ca02c", width=2, dash="dash"),
                   annotation_text=f"5년 평균 ({mean5:.1f}℃)", annotation_position="bottom right",
                   annotation_font=dict(color="#2ca02c"))
