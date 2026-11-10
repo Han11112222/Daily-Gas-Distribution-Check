@@ -2591,21 +2591,8 @@ def run_tab3_contract():
         return
 
     label = f"{cd['year']}년 약정물량" if cd["year"] else "약정물량"
-    st.caption("ver1·ver2는 과거 실적 기준만 다릅니다. 약정물량(천N㎥)은 같고, 천m³ 단위로 비교합니다.")
-
-    # ── ver1: 현재 화면(구글시트 일별 공급량 합계) ──
-    st.header("ver1 · 공급량 기준 (일별 공급량 합계)")
-    piv1, src1 = load_monthly_m3_history()
-    res1 = None
-    if piv1 is None or piv1.empty:
-        st.error("과거 월별 공급량(m³) 자료를 읽지 못했습니다. (구글시트 '공급량(M3)' 열 또는 분석 엑셀 확인)")
-    else:
-        res1 = _render_contract_version("contract_v1", piv1, src1, cd, label)
-
-    st.markdown("---")
-
     # ── ver2: 수급량(GJ) ÷ 42.563 = 천m³ ──
-    st.header(f"ver2 · 수급량 기준 (수급량 GJ ÷ {HEAT_MJ_PER_M3} → 천m³)")
+    st.header(f"수급량 기준 (수급량 GJ ÷ {HEAT_MJ_PER_M3} → 천m³)")
     piv2 = load_monthly_supply_gj_history()
     res2 = None
     if piv2 is None or piv2.empty:
@@ -2624,17 +2611,14 @@ def run_tab3_contract():
     # 엑셀 다운로드: ver1 / ver2 비교표·과거 월별 총량 + 업종별 약정물량
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        if res1:
-            res1["cmp"].to_excel(writer, sheet_name="ver1_약정vs과거범위", index=False)
-            res1["hist"].to_excel(writer, sheet_name="ver1_과거월별총량(천m3)", index=False)
         if res2:
-            res2["cmp"].to_excel(writer, sheet_name="ver2_약정vs과거범위", index=False)
-            res2["hist"].to_excel(writer, sheet_name="ver2_과거월별총량(천m3)", index=False)
+            res2["cmp"].to_excel(writer, sheet_name="약정vs과거범위", index=False)
+            res2["hist"].to_excel(writer, sheet_name="과거월별총량(천m3)", index=False)
         d2 = cd["detail"].copy()
         d2.columns = [f"{m}월" for m in range(1, 13)]
         d2.index.name = "업종"
         d2.reset_index().to_excel(writer, sheet_name="업종별약정물량(천Nm3)", index=False)
-    st.download_button("💾 약정물량 분석 데이터 엑셀 저장 (ver1+ver2)", buf.getvalue(),
+    st.download_button("💾 약정물량 분석 데이터 엑셀 저장", buf.getvalue(),
                        f"약정물량_분석_{cd['year'] or ''}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
