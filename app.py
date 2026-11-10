@@ -1200,8 +1200,15 @@ def run_tab1_management():
         mtd_data = df[mask_mtd]
         a_mtd, p_mtd = mtd_data['실적(GJ)'].sum(), mtd_data['계획(GJ)'].sum()
         rate_mtd = (a_mtd/p_mtd*100) if p_mtd > 0 else 0
+        mtd_temp = pd.to_numeric(mtd_data['평균기온(℃)'], errors='coerce').mean() if '평균기온(℃)' in mtd_data.columns else np.nan
+        mtd_txt = f"{mtd_temp:.1f}℃" if pd.notna(mtd_temp) else "-"
+        m_html = (
+            f'<div style="text-align:right;min-width:150px;">'
+            f'<div style="font-size:14px;color:#555;">🌡 {target_date.month}월 1~{target_date.day}일 평균기온</div>'
+            f'<div style="font-size:40px;font-weight:700;line-height:1.2;color:#31333F;">{mtd_txt}</div></div>'
+        )
         st.markdown(kpi_card("월간 누적 달성률", rate_mtd, f"{int(a_mtd):,} GJ", a_mtd - p_mtd,
-                             f"누적 계획: {int(p_mtd):,} GJ", ABN_BG[kind_m]), unsafe_allow_html=True)
+                             f"누적 계획: {int(p_mtd):,} GJ", ABN_BG[kind_m], m_html), unsafe_allow_html=True)
 
     with col_g3:
         mask_ytd = (df['날짜'].dt.year == target_date.year) & (df['날짜'] <= target_date)
