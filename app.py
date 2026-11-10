@@ -1556,7 +1556,7 @@ def run_tab2_analysis():
             show_exp = st.toggle("예상 실적", value=False, key=f"{key_prefix}cum_exp",
                                  help="마지막 실적일 이후 남은 기간은 일일계획량을 그대로 더해, 월간 계획 대비 예상 달성률을 보여줍니다.")
 
-        period_txt = f"1~{cutoff_day}일" if use_cutoff else "월말까지(월 전체)"
+        period_txt = f"1~{cutoff_day}일" if (use_cutoff and not show_exp) else "월말까지(월 전체)"
         st.caption(f"집계 기간: {sel_month}월 {period_txt}")
 
         # 최저기온: 구글시트 '최저' 열 우선, 시트에 값이 없는 날짜는 기상청 API(대구 143)로 보충
@@ -1580,7 +1580,7 @@ def run_tab2_analysis():
         cum_rows = []
         for y in cmp_years:
             sub = df_all[(df_all["연"] == y) & (df_all["월"] == sel_month)].copy()
-            if use_cutoff:
+            if use_cutoff and not show_exp:   # 예상 실적(월말 기준)을 켜면 월 전체로 비교
                 sub = sub[sub["일"] <= cutoff_day]
             sub = sub[sub[act_col] > 0]
             if sub.empty:
@@ -1605,6 +1605,31 @@ def run_tab2_analysis():
         if cum_rows:
             cum_df = pd.DataFrame(cum_rows)
 
+            # 예상 실적: 마지막 실적일까지 실적 + 남은 기간 일일계획량 = 당월 말일 예상
+            exp_info = None
+            if show_exp and f"{sel_year}년" in cum_df["연도"].values:
+                pm = None
+                if plan_df is not None and not this_df.empty:
+                    pm = plan_df[(plan_df["날짜"].dt.year == sel_year) & (plan_df["날짜"].dt.month == sel_month)]
+                if pm is None or pm.empty:
+                    st.info(f"{sel_year}년 {sel_month}월 계획 데이터가 없어 예상 실적을 계산할 수 없습니다.")
+                else:
+                    last_act = this_df["일자"].max()
+                    act_gj = float(this_df[act_col].sum() / 1000.0)
+                    plan_month_gj = float(pm["plan_gj"].sum())
+                    plan_to_date = float(pm.loc[pm["날짜"] <= last_act, "plan_gj"].sum())
+                    rem = pm[pm["날짜"] > last_act]
+                    rem_gj = float(rem["plan_gj"].sum())
+                    exp_info = dict(
+                        act=act_gj, rem=rem_gj, exp=act_gj + rem_gj, plan_month=plan_month_gj,
+                        rate=(act_gj + rem_gj) / plan_month_gj * 100 if plan_month_gj > 0 else 0.0,
+                        cur_rate=act_gj / plan_to_date * 100 if plan_to_date > 0 else 0.0,
+                        last_day=int(last_act.day),
+                        rem_txt=(f"{int(rem['날짜'].dt.day.min())}~{int(rem['날짜'].dt.day.max())}일 ({len(rem)}일)"
+                                 if not rem.empty else "남은 기간 없음"),
+                    )
+            top_val = max(float(cum_df["누적공급량(GJ)"].max()), exp_info["exp"] if exp_info else 0.0)
+
             if show_min and cum_df["최저기온(℃)"].isna().all():
                 st.warning("최저기온 데이터를 가져오지 못했습니다. (구글시트 '최저' 열과 기상청 API 모두 값이 없음)")
 
@@ -1620,7 +1645,7 @@ def run_tab2_analysis():
             # 기온선은 '가장 짧은 막대의 상단보다 아래'(막대 몸통 안쪽)에 두어 막대 상단 숫자와 겹치지 않게 하고,
             # 평균기온/최저기온은 각각 따로 눈금을 잡아 위아래 폭이 크게 보이도록 함
             # 가정용 청구전수를 켜면 막대 위쪽에 선이 들어갈 여백을 더 확보
-            y1_max = float(cum_df["누적공급량(GJ)"].max()) * (1.3 if show_hh else 1.15)
+            y1_max = top_val * (1.3 if show_hh else 1.15)
 
             def band_range(vals, lo_frac, hi_frac, min_span):
                 """vals가 축 높이의 lo_frac~hi_frac 구간에 놓이도록 하는 축 범위를 반환"""
@@ -1689,7 +1714,7 @@ def run_tab2_analysis():
                 if hh_vals.empty:
                     st.info(f"{sel_month}월 가정용 청구전수 데이터가 없습니다. (코드 상단 HOUSEHOLD_MONTHLY에 (연, 월): 값을 추가하세요)")
                 else:
-                    bar_top_max = float(cum_df["누적공급량(GJ)"].max()) / y1_max
+                    bar_top_max = top_val / y1_max
                     hh_lo = bar_top_max + 0.08
                     hh_hi = min(0.94, hh_lo + 0.0455)  # 상승 폭(기존 0.065)을 30% 줄여 더 완만한 기울기로 표현
                     hh_range = band_range(hh_vals, hh_lo, hh_hi, 1.0)
@@ -1703,13 +1728,27 @@ def run_tab2_analysis():
                     go.Bar(
                         x=cum_df["연도"], y=cum_df["누적공급량(GJ)"],
                         name="누적 공급량(GJ)", marker_color=bar_colors,
-                        text=cum_df["누적공급량(GJ)"].map(lambda v: f"{v:,.0f}"),
+                        text=[("" if (exp_info and c == sel_label) else f"{v:,.0f}") for c, v in zip(cum_df["연도"], cum_df["누적공급량(GJ)"])],
                         textposition="outside",
                         textfont=dict(color=C_TXT, size=12),
                         hovertemplate="%{x}<br>누적: %{y:,.0f} GJ<extra></extra>",
                     ),
                     secondary_y=False,
                 )
+
+                if exp_info:   # 남은 기간 계획량을 실적 막대 위에 이어 붙여 당월 말일 예상 실적을 표시
+                    fig_cum.add_trace(
+                        go.Bar(
+                            x=[sel_label], y=[exp_info["rem"]], base=[exp_info["act"]], name="예상(남은 기간 계획)",
+                            marker=dict(color="rgba(26,115,232,0.35)", line=dict(color=C_SEL, width=1.5),
+                                        pattern=dict(shape="/", fgcolor=C_SEL, size=6)),
+                            text=[f"<b>예상 {exp_info['exp']:,.0f}</b><br>계획대비 {exp_info['rate']:.1f}%"],
+                            textposition="outside", textfont=dict(color=C_SEL, size=12),
+                            hovertemplate=(f"{sel_label} 예상<br>실적 {exp_info['act']:,.0f} + 계획 {exp_info['rem']:,.0f}"
+                                           f" = {exp_info['exp']:,.0f} GJ<extra></extra>"),
+                        ),
+                        secondary_y=False,
+                    )
 
                 def add_temp_line(col, name, color, txt_color, txt_color_sel, dash, symbol, axis):
                     # 흰색 바탕선(케이싱)을 먼저 깔아 막대 위에서도 선이 또렷하게 보이도록 함
@@ -1745,10 +1784,9 @@ def run_tab2_analysis():
                         line=dict(color="#D93025", width=3, dash="dot"), layer="above",
                     )
                     fig_cum.add_annotation(
-                        xref="x", yref="y2", x=plan_idx, y=float(plan_temp), yshift=36,
+                        xref="x", yref="y2", x=plan_idx + 0.43, y=float(plan_temp), xanchor="left", yanchor="middle",
                         text=f"<b>계획 {plan_temp:.1f}℃</b>", showarrow=False,
-                        font=dict(color="#D93025", size=12), bgcolor="rgba(255,255,255,0.92)",
-                        bordercolor="#D93025", borderwidth=1, borderpad=3,
+                        font=dict(color="#D93025", size=13),
                     )
                 if show_min and min_range is not None:
                     add_temp_line("최저기온(℃)", "최저기온", C_MIN, C_MIN_TXT, C_MIN_TXT_SEL, "dot", "diamond", "y4")
@@ -1801,6 +1839,10 @@ def run_tab2_analysis():
                         overlaying="y", side="right", visible=False,
                         showgrid=False, zeroline=False, range=hh_range
                     ))
+                if exp_info:
+                    fig_cum.update_layout(barmode="overlay")
+                if plan_temp is not None:   # 점선 오른쪽에 계획 기온 라벨이 들어갈 여백 확보
+                    fig_cum.update_xaxes(range=[-0.5, len(cum_df) - 0.5 + 0.9])
                 st.plotly_chart(fig_cum, use_container_width=True)
 
             with chart_col:
@@ -1817,35 +1859,19 @@ def run_tab2_analysis():
                         + ", ".join(f"{k} {m}월" for k, m in hh_fallback.items()) + ")"
                     )
 
-                # ── [NEW] 예상 실적: 실적(마지막 실적일까지) + 남은 기간 계획량 = 월간 계획 대비 % ──
-                if show_exp:
-                    pm = None
-                    if plan_df is not None and not this_df.empty:
-                        pm = plan_df[(plan_df["날짜"].dt.year == sel_year) & (plan_df["날짜"].dt.month == sel_month)]
-                    if pm is None or pm.empty:
-                        st.info(f"{sel_year}년 {sel_month}월 계획 데이터가 없어 예상 실적을 계산할 수 없습니다.")
-                    else:
-                        last_act = this_df["일자"].max()
-                        act_gj = float(this_df[act_col].sum() / 1000.0)
-                        plan_month_gj = float(pm["plan_gj"].sum())
-                        plan_to_date = float(pm.loc[pm["날짜"] <= last_act, "plan_gj"].sum())
-                        rem = pm[pm["날짜"] > last_act]
-                        rem_gj = float(rem["plan_gj"].sum())
-                        exp_gj = act_gj + rem_gj
-                        exp_rate = exp_gj / plan_month_gj * 100 if plan_month_gj > 0 else 0.0
-                        cur_rate = act_gj / plan_to_date * 100 if plan_to_date > 0 else 0.0
-                        rem_txt = (f"{int(rem['날짜'].dt.day.min())}~{int(rem['날짜'].dt.day.max())}일 ({len(rem)}일)"
-                                   if not rem.empty else "남은 기간 없음")
-                        color = "#1A73E8" if exp_rate >= 100 else "#D93025"
-                        st.markdown(f"""<div style="background:#F0F2F6;border-radius:10px;padding:14px 18px;margin-top:8px;">
-                            <div style="font-size:15px;color:#555;margin-bottom:6px;">🔮 <b>{sel_year}년 {sel_month}월 예상 실적</b> (남은 기간은 계획량 100% 가정)</div>
-                            <div style="font-size:15px;line-height:1.7;">
-                            실적 1~{int(last_act.day)}일: <b>{act_gj:,.0f} GJ</b> (해당 기간 계획 대비 {cur_rate:.1f}%)<br>
-                            + 남은 계획 {rem_txt}: <b>{rem_gj:,.0f} GJ</b><br>
-                            = 예상 월 공급량 <b>{exp_gj:,.0f} GJ</b> / 월간 계획 <b>{plan_month_gj:,.0f} GJ</b><br>
-                            ➡️ 월간 계획 대비 <span style="font-size:24px;font-weight:800;color:{color};">{exp_rate:.1f}%</span>
-                            <span style="color:#666;">({exp_gj - plan_month_gj:+,.0f} GJ)</span>
-                            </div></div>""", unsafe_allow_html=True)
+                # ── 예상 실적 요약 (실적 + 남은 기간 계획 = 월간 계획 대비 %) ──
+                if exp_info:
+                    e = exp_info
+                    color = "#1A73E8" if e["rate"] >= 100 else "#D93025"
+                    st.markdown(f"""<div style="background:#F0F2F6;border-radius:10px;padding:14px 18px;margin-top:8px;">
+                        <div style="font-size:15px;color:#555;margin-bottom:6px;">🔮 <b>{sel_year}년 {sel_month}월 예상 실적</b> (남은 기간은 계획량 100% 가정)</div>
+                        <div style="font-size:15px;line-height:1.7;">
+                        실적 1~{e['last_day']}일: <b>{e['act']:,.0f} GJ</b> (해당 기간 계획 대비 {e['cur_rate']:.1f}%)<br>
+                        + 남은 계획 {e['rem_txt']}: <b>{e['rem']:,.0f} GJ</b><br>
+                        = 예상 월 공급량 <b>{e['exp']:,.0f} GJ</b> / 월간 계획 <b>{e['plan_month']:,.0f} GJ</b><br>
+                        ➡️ 월간 계획 대비 <span style="font-size:24px;font-weight:800;color:{color};">{e['rate']:.1f}%</span>
+                        <span style="color:#666;">({e['exp'] - e['plan_month']:+,.0f} GJ)</span>
+                        </div></div>""", unsafe_allow_html=True)
         else:
             st.info("비교할 누적 데이터가 없습니다.")
         
