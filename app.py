@@ -696,23 +696,25 @@ def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
         th = "padding:8px;border-bottom:2px solid #ddd;text-align:right;background:#F0F2F6;"
         td = "padding:8px;border-bottom:1px solid #eee;text-align:right;"
         use = "background:#D4E6FF;font-weight:700;"
+        other_p = diff - eff_p
         body = (
-            f"<tr style='{use}'><td style='{td}text-align:left;'>실적 기온 기준 (표에 사용)</td>"
+            f"<tr style='{use}'><td style='{td}text-align:left;'>① 실적 기온 구간 적용 (표에 사용)</td>"
             f"<td style='{td}'>{t_act:.1f}℃</td><td style='{td}'>{a_lo:g}~{a_hi:g}℃</td>"
             f"<td style='{td}'>{slope_a:,.0f} GJ/℃</td>"
-            f"<td style='{td}'>{abs(dt):.1f}℃ × {slope_a:,.0f} = {eff:+,.0f} GJ</td></tr>"
-            f"<tr style='background:#F0F2F6;font-weight:700;'><td style='{td}text-align:left;'>계획 대비 증감</td>"
-            f"<td style='{td}'></td><td style='{td}'></td><td style='{td}'></td><td style='{td}'>{diff:+,.0f} GJ</td></tr>"
-            f"<tr><td style='{td}text-align:left;'>계획 기온 기준 (참고)</td>"
+            f"<td style='{td}'>{abs(dt):.1f}℃ × {slope_a:,.0f} = {eff:+,.0f} GJ</td>"
+            f"<td style='{td}'>{other:+,.0f} GJ</td>"
+            f"<td style='{td}'>{diff:+,.0f} GJ</td></tr>"
+            f"<tr><td style='{td}text-align:left;'>② 계획 기온 구간 적용 (참고)</td>"
             f"<td style='{td}'>{t_plan:.1f}℃</td><td style='{td}'>{p_lo:g}~{p_lo + 5:g}℃</td>"
             f"<td style='{td}'>{slope_p:,.0f} GJ/℃</td>"
-            f"<td style='{td}'>{abs(dt):.1f}℃ × {slope_p:,.0f} = {eff_p:+,.0f} GJ</td></tr>"
-            f"<tr><td style='{td}text-align:left;'>기온 외 효과 (나머지)</td><td style='{td}'></td><td style='{td}'></td>"
-            f"<td style='{td}'></td><td style='{td}'>{other:+,.0f} GJ</td></tr>")
+            f"<td style='{td}'>{abs(dt):.1f}℃ × {slope_p:,.0f} = {eff_p:+,.0f} GJ</td>"
+            f"<td style='{td}'>{other_p:+,.0f} GJ</td>"
+            f"<td style='{td}'>{diff:+,.0f} GJ</td></tr>")
         st.markdown(
             "<table style='width:100%;border-collapse:collapse;font-size:14px;'><thead><tr>"
             f"<th style='{th}text-align:left;'>구분</th><th style='{th}'>기온</th><th style='{th}'>기온 구간</th>"
-            f"<th style='{th}'>1℃당 변화량</th><th style='{th}'>기온 차이 × 변화량 = 기온 효과</th></tr></thead>"
+            f"<th style='{th}'>1℃당 변화량</th><th style='{th}'>기온 차이 × 변화량 = 기온 효과</th>"
+            f"<th style='{th}'>기온 외 효과(나머지)</th><th style='{th}'>계획 대비 증감</th></tr></thead>"
             f"<tbody>{body}</tbody></table>", unsafe_allow_html=True)
         if (a_lo, a_hi) != (p_lo, p_lo + 5.0):
             lo_e, hi_e = sorted([eff, eff_p], key=abs)
