@@ -2414,51 +2414,58 @@ def build_contract_figure(contract: pd.Series, hist: pd.DataFrame, mx: pd.Series
     return fig
 
 
-def run_tab3_contract():
-    if not _contract_pw_gate():
-        return
+SUPPLY_GJ_SHEET_ID = "1gIhArPlLBJ9fwlaqXtZWxiKlSK9hbRuz6HcDw_Yf7Is"   # 상품별 공급량 재분배 (수급량 GJ)
+HEAT_MJ_PER_M3 = 42.563   # 열량(MJ/m³): 수급량(GJ) ÷ 42.563 = 천m³
 
-    st.sidebar.header("📂 [약정물량] 데이터 파일")
-    up = st.sidebar.file_uploader("약정물량 엑셀 업로드", type=["xlsx"], key="u3")
-    file_bytes = None
-    if up is not None:
-        file_bytes = up.getvalue()
-        st.sidebar.success("✅ 약정물량 파일 로드 성공")
-    else:   # 업로드가 없으면 앱 폴더의 '약정' 엑셀을 찾아 사용
-        cands = sorted(Path(__file__).parent.glob("*약정*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if cands:
-            file_bytes = cands[0].read_bytes()
-            st.sidebar.info(f"ℹ️ 기본 약정물량 파일 사용 ({cands[0].name})")
 
-    st.title("📑 약정물량 분석")
-    if file_bytes is None:
-        st.info("👈 좌측 사이드바에서 약정물량 엑셀 파일을 업로드해주세요.")
-        return
-    cd = parse_contract_excel(file_bytes)
-    if cd is None:
-        st.error("약정물량 엑셀에서 '1월~12월' 표를 찾지 못했습니다. (작성양식 시트의 월별 표 형식을 확인하세요)")
-        return
+@st.cache_data(show_spinner=False, ttl=600)
+def load_monthly_supply_gj_history():
+    """ver2: 구글시트 '상품별 공급량 재분배'의 1행(수급량, GJ; D열~)을 6행의 'YYYY-MM' 헤더와 짝지어
+    월별 수급량을 읽고, 열량 42.563으로 천m³로 환산. 반환: 연×월 DataFrame(천m³) 또는 None"""
+    url = f"https://docs.google.com/spreadsheets/d/{SUPPLY_GJ_SHEET_ID}/export?format=csv&gid=0"
+    try:
+        raw = pd.read_csv(url, header=None, dtype=str)
+    except Exception:
+        return None
+    # 'YYYY-MM' 형태 헤더가 가장 많은 행 = 월 헤더 행 (기본 6행)
+    hdr_row, best = None, 0
+    for i in range(min(len(raw), 20)):
+        n = sum(bool(re.match(r"^\s*\d{4}\D+\d{1,2}\s*$", str(v))) for v in raw.iloc[i].values)
+        if n > best:
+            hdr_row, best = i, n
+    if hdr_row is None or best < 12:
+        return None
+    # 수급량(GJ) 값 행: C열에 '수급량'이 적힌 행 (기본 1행)
+    val_row = next((i for i in range(min(len(raw), 10)) if "수급량" in str(raw.iat[i, 2]) and "(GJ)" in str(raw.iat[i, 2]).replace(" ", "")), 0) \
+        if raw.shape[1] > 2 else 0
+    recs = {}
+    for j in range(3, raw.shape[1]):       # D열 ~ 끝
+        m = re.match(r"^\s*(\d{4})\D+(\d{1,2})\s*$", str(raw.iat[hdr_row, j]))
+        v = pd.to_numeric(str(raw.iat[val_row, j]).replace(",", ""), errors="coerce")
+        if m and pd.notna(v) and v > 0:
+            recs[(int(m.group(1)), int(m.group(2)))] = float(v) / HEAT_MJ_PER_M3   # GJ → 천m³
+    if not recs:
+        return None
+    ser = pd.Series(recs)
+    piv = ser.unstack(level=1).reindex(columns=range(1, 13))
+    return piv
 
-    piv, src = load_monthly_m3_history()
-    if piv is None or piv.empty:
-        st.error("과거 월별 공급량(m³) 자료를 읽지 못했습니다. (구글시트 '공급량(M3)' 열 또는 분석 엑셀 확인)")
-        return
 
+def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, label: str):
+    """한 가지 과거 기준(piv: 연×월, 천m³)에 대해 슬라이더·판정·그래프·표를 그리고, 다운로드용 표를 반환"""
     full_years = [int(y) for y in piv.index if piv.loc[y].notna().all()]   # 12개월 모두 완결된 연도만
     if len(full_years) < 2:
         st.error("12개월이 모두 집계된 과거 연도가 부족합니다.")
-        return
-    y_max = max(full_years)
-    y_min = min(full_years)
+        return None
+    y_max, y_min = max(full_years), min(full_years)
     c1, c2 = st.columns([2, 3])
     with c1:
         yr_range = st.slider("과거 연도 범위", min_value=y_min, max_value=y_max,
-                             value=(max(y_min, y_max - 9), y_max), step=1, key="contract_yr_range")
+                             value=(max(y_min, y_max - 9), y_max), step=1, key=f"{key}_yr_range")
     sel_years = [y for y in full_years if yr_range[0] <= y <= yr_range[1]]
     hist = piv.loc[sel_years]
     contract = cd["total"].copy()
     contract.index = range(1, 13)
-    label = f"{cd['year']}년 약정물량" if cd["year"] else "약정물량"
 
     mx, mn, avg = hist.max(), hist.min(), hist.mean()
     over = contract > mx
@@ -2476,7 +2483,8 @@ def run_tab3_contract():
     else:
         st.success(f"✅ 1~12월 약정물량이 모두 과거 {len(sel_years)}년 최대·최소 범위 안에 있습니다.")
 
-    st.plotly_chart(build_contract_figure(contract, hist, mx, mn, out_mask, label), use_container_width=True)
+    st.plotly_chart(build_contract_figure(contract, hist, mx, mn, out_mask, label), use_container_width=True,
+                    key=f"{key}_chart")
 
     cmp_df = pd.DataFrame({
         "월": [f"{m}월" for m in range(1, 13)],
@@ -2505,32 +2513,88 @@ def run_tab3_contract():
                .set_properties(**{"text-align": "center"})
                .set_table_styles([dict(selector="th", props=[("text-align", "center")])]),
         use_container_width=True, hide_index=True)
-    st.caption("※ 단위는 약정물량 천N㎥, 과거 실적 천m³이며 동일 단위로 간주해 비교했습니다. 해당 월의 일별 자료가 모두 있는 연도만 포함합니다.")
 
     with st.expander("과거 연도별 월별 총량(천m³) 보기"):
         hist_show = hist.copy()
         hist_show.index = [f"{int(y)}년" for y in hist_show.index]
         hist_show.columns = [f"{m}월" for m in range(1, 13)]
         st.dataframe(hist_show.style.format("{:,.0f}"), use_container_width=True)
+    h2 = hist.copy()
+    h2.index.name = "연도"
+    h2.columns = [f"{m}월" for m in range(1, 13)]
+    return dict(cmp=cmp_df, hist=h2.reset_index())
+
+
+def run_tab3_contract():
+    if not _contract_pw_gate():
+        return
+
+    st.sidebar.header("📂 [약정물량] 데이터 파일")
+    up = st.sidebar.file_uploader("약정물량 엑셀 업로드", type=["xlsx"], key="u3")
+    file_bytes = None
+    if up is not None:
+        file_bytes = up.getvalue()
+        st.sidebar.success("✅ 약정물량 파일 로드 성공")
+    else:   # 업로드가 없으면 앱 폴더의 '약정' 엑셀을 찾아 사용
+        cands = sorted(Path(__file__).parent.glob("*약정*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if cands:
+            file_bytes = cands[0].read_bytes()
+            st.sidebar.info(f"ℹ️ 기본 약정물량 파일 사용 ({cands[0].name})")
+
+    st.title("📑 약정물량 분석")
+    if file_bytes is None:
+        st.info("👈 좌측 사이드바에서 약정물량 엑셀 파일을 업로드해주세요.")
+        return
+    cd = parse_contract_excel(file_bytes)
+    if cd is None:
+        st.error("약정물량 엑셀에서 '1월~12월' 표를 찾지 못했습니다. (작성양식 시트의 월별 표 형식을 확인하세요)")
+        return
+
+    label = f"{cd['year']}년 약정물량" if cd["year"] else "약정물량"
+    st.caption("ver1·ver2는 과거 실적 기준만 다릅니다. 약정물량(천N㎥)은 같고, 천m³ 단위로 비교합니다.")
+
+    # ── ver1: 현재 화면(구글시트 일별 공급량 합계) ──
+    st.header("ver1 · 공급량 기준 (일별 공급량 합계)")
+    piv1, src1 = load_monthly_m3_history()
+    res1 = None
+    if piv1 is None or piv1.empty:
+        st.error("과거 월별 공급량(m³) 자료를 읽지 못했습니다. (구글시트 '공급량(M3)' 열 또는 분석 엑셀 확인)")
+    else:
+        res1 = _render_contract_version("contract_v1", piv1, src1, cd, label)
+
+    st.markdown("---")
+
+    # ── ver2: 수급량(GJ) ÷ 42.563 = 천m³ ──
+    st.header(f"ver2 · 수급량 기준 (수급량 GJ ÷ {HEAT_MJ_PER_M3} → 천m³)")
+    piv2 = load_monthly_supply_gj_history()
+    res2 = None
+    if piv2 is None or piv2.empty:
+        st.error("수급량 시트(상품별 공급량 재분배)를 읽지 못했습니다. 시트 공유가 '링크가 있는 모든 사용자 보기'인지, "
+                 "1행(수급량 GJ)·6행(YYYY-MM) 위치가 맞는지 확인해주세요.")
+    else:
+        res2 = _render_contract_version("contract_v2", piv2, "구글시트 상품별 공급량 재분배 1행 ÷ 42.563", cd, label)
+    st.caption("※ 약정은 천N㎥, 과거 실적은 천m³이며 동일 단위로 간주했습니다. 해당 월·연이 모두 집계된 연도만 포함합니다.")
+
     with st.expander("업종별 약정물량(천N㎥) 보기"):
         det = cd["detail"].copy()
         det.columns = [f"{m}월" for m in range(1, 13)]
         det["소계"] = det.sum(axis=1)
         st.dataframe(det.style.format("{:,.0f}"), use_container_width=True)
 
-    # 엑셀 다운로드: 비교표 / 과거 연도별 월별 총량 / 업종별 약정물량
+    # 엑셀 다운로드: ver1 / ver2 비교표·과거 월별 총량 + 업종별 약정물량
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        cmp_df.to_excel(writer, sheet_name="약정vs과거범위", index=False)
-        h2 = hist.copy()
-        h2.index.name = "연도"
-        h2.columns = [f"{m}월" for m in range(1, 13)]
-        h2.reset_index().to_excel(writer, sheet_name="과거월별총량(천m3)", index=False)
+        if res1:
+            res1["cmp"].to_excel(writer, sheet_name="ver1_약정vs과거범위", index=False)
+            res1["hist"].to_excel(writer, sheet_name="ver1_과거월별총량(천m3)", index=False)
+        if res2:
+            res2["cmp"].to_excel(writer, sheet_name="ver2_약정vs과거범위", index=False)
+            res2["hist"].to_excel(writer, sheet_name="ver2_과거월별총량(천m3)", index=False)
         d2 = cd["detail"].copy()
         d2.columns = [f"{m}월" for m in range(1, 13)]
         d2.index.name = "업종"
         d2.reset_index().to_excel(writer, sheet_name="업종별약정물량(천Nm3)", index=False)
-    st.download_button("💾 약정물량 분석 데이터 엑셀 저장", buf.getvalue(),
+    st.download_button("💾 약정물량 분석 데이터 엑셀 저장 (ver1+ver2)", buf.getvalue(),
                        f"약정물량_분석_{cd['year'] or ''}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
