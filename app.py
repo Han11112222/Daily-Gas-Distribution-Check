@@ -2264,12 +2264,286 @@ def run_tab2_analysis():
 
 
 # ==============================================================================
+# [탭 3] 약정물량 (비밀번호 보호) — 약정물량 엑셀의 월별 총량을 과거 10년 월별 실적과 비교
+# ==============================================================================
+CONTRACT_PW = "1234"
+
+
+def _contract_pw_gate() -> bool:
+    """비밀번호가 맞으면 True. (비밀번호는 코드에 들어 있으므로 코드를 볼 수 있는 사람에겐 노출됩니다)"""
+    if st.session_state.get("contract_pw_ok"):
+        return True
+    st.title("🔒 약정물량")
+    with st.form("contract_pw_form"):
+        pw = st.text_input("비밀번호", type="password")
+        ok = st.form_submit_button("확인")
+    if ok:
+        if pw == CONTRACT_PW:
+            st.session_state["contract_pw_ok"] = True
+            st.rerun()
+        else:
+            st.error("비밀번호가 올바르지 않습니다.")
+    return False
+
+
+def parse_contract_excel(file_bytes: bytes):
+    """약정물량 엑셀('작성양식' 시트)에서 업종별·월별 표와 합계(월별 총량)를 읽는다. 단위: 천N㎥"""
+    try:
+        xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
+        sheet = "작성양식" if "작성양식" in xls.sheet_names else xls.sheet_names[0]
+        raw = xls.parse(sheet, header=None)
+    except Exception:
+        return None
+
+    def norm(v):
+        return "" if pd.isna(v) else str(v).replace(" ", "").replace(" ", "").strip()
+
+    hdr = None
+    for i in range(len(raw)):
+        vals = [norm(v) for v in raw.iloc[i].values]
+        if "1월" in vals and "12월" in vals:
+            hdr = i
+            break
+    if hdr is None:
+        return None
+    month_col = {}
+    for j, v in enumerate(raw.iloc[hdr].values):
+        m = re.match(r"^(\d{1,2})월$", norm(v))
+        if m and 1 <= int(m.group(1)) <= 12:
+            month_col[int(m.group(1))] = j
+    if len(month_col) < 12:
+        return None
+    label_col = min(month_col.values()) - 1
+
+    rows = {}
+    for i in range(hdr + 1, len(raw)):
+        label = norm(raw.iat[i, label_col]) if label_col >= 0 else ""
+        if not label or label.startswith("*"):
+            continue
+        vals = [pd.to_numeric(raw.iat[i, month_col[m]], errors="coerce") for m in range(1, 13)]
+        if pd.Series(vals).notna().sum() == 0:
+            continue
+        rows[label] = vals
+    if not rows:
+        return None
+
+    detail = pd.DataFrame(rows, index=range(1, 13)).T
+    total_key = next((k for k in rows if k == "합계"), None)
+    total = detail.loc[total_key] if total_key else detail.sum()
+    detail_only = detail.drop(index=total_key) if total_key else detail
+
+    year, company = None, ""
+    for i in range(min(hdr, 8)):
+        for v in raw.iloc[i].values:
+            t = "" if pd.isna(v) else str(v)
+            m = re.search(r"(\d{4})\s*년도?", t)
+            if m and year is None:
+                year = int(m.group(1))
+            if "회사명" in t:
+                company = t.split(":")[-1].strip()
+    return dict(total=total.astype(float), detail=detail_only, year=year, company=company, sheet=sheet)
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def load_monthly_m3_history():
+    """연·월별 공급량 합계(천m³). 해당 월의 모든 일자 자료가 있는 달만 사용(진행 중인 달은 NaN). 반환: (연×월 DataFrame, 출처)"""
+    h = load_historical_data_common()
+    src = "구글시트"
+    if h is None or h.empty or float(h["val_m3"].sum()) <= 0:
+        # 대체: 같은 폴더의 분석 엑셀 '일별실적' 시트의 공급량(M3)
+        h, src = None, "엑셀(대체)"
+        try:
+            p = Path(__file__).parent / "공급량(계획_실적).xlsx"
+            if p.exists():
+                d = pd.read_excel(p, sheet_name="일별실적")
+                d.columns = [str(c).replace(" ", "") for c in d.columns]
+                c_m3 = next((c for c in d.columns if "공급량" in c and "M3" in c.upper()), None)
+                if c_m3 and "일자" in d.columns:
+                    h = pd.DataFrame({"일자": pd.to_datetime(d["일자"], errors="coerce"),
+                                      "val_m3": pd.to_numeric(d[c_m3], errors="coerce")}).dropna()
+        except Exception:
+            h = None
+    if h is None or h.empty:
+        return None, None
+    h = h.drop_duplicates("일자")
+    h = h[h["val_m3"] > 0].copy()
+    h["연"], h["월"] = h["일자"].dt.year, h["일자"].dt.month
+    g = h.groupby(["연", "월"]).agg(m3=("val_m3", "sum"), n=("val_m3", "size")).reset_index()
+    g["dim"] = [pd.Period(year=int(y), month=int(m), freq="M").days_in_month for y, m in zip(g["연"], g["월"])]
+    g = g[g["n"] >= g["dim"]]
+    piv = (g.pivot(index="연", columns="월", values="m3") / 1000.0).reindex(columns=range(1, 13))
+    return piv, src
+
+
+def build_contract_figure(contract: pd.Series, hist: pd.DataFrame, mx: pd.Series, mn: pd.Series, out_mask: pd.Series,
+                          label: str) -> go.Figure:
+    months = [f"{m}월" for m in range(1, 13)]
+    fig = go.Figure()
+    # 과거 연도별 꺾은선 (얇은 파스텔)
+    pastel = ["#AFC8EE", "#C6BEEB", "#EDB9C6", "#B7D9BE", "#EBD49B", "#B5D3DE", "#D9C3B0", "#C9D6A3", "#E3B7DB", "#B9C4CF"]
+    for i, (y, row) in enumerate(hist.iterrows()):
+        fig.add_trace(go.Scatter(x=months, y=row.values, mode="lines", name=f"{int(y)}년",
+                                 line=dict(color=pastel[i % len(pastel)], width=1.6, shape="spline", smoothing=0.5),
+                                 hovertemplate="%{y:,.0f} 천㎥<extra>" + f"{int(y)}년</extra>"))
+    # 최대/최소 범위 (음영)
+    fig.add_trace(go.Scatter(x=months, y=mn.values, mode="lines", name="10년 최소",
+                             line=dict(color="#2563EB", width=2, dash="dash", shape="spline", smoothing=0.5),
+                             hovertemplate="%{y:,.0f} 천㎥<extra>10년 최소</extra>"))
+    fig.add_trace(go.Scatter(x=months, y=mx.values, mode="lines", name="10년 최대",
+                             line=dict(color="#D93025", width=2, dash="dash", shape="spline", smoothing=0.5),
+                             fill="tonexty", fillcolor="rgba(148,163,184,0.15)",
+                             hovertemplate="%{y:,.0f} 천㎥<extra>10년 최대</extra>"))
+    # 약정물량
+    fig.add_trace(go.Scatter(x=months, y=contract.values, mode="lines+markers+text", name=label,
+                             line=dict(color="#111827", width=3.6, shape="spline", smoothing=0.5),
+                             marker=dict(size=9, color="#111827", line=dict(color="white", width=2)),
+                             text=[f"{v:,.0f}" for v in contract.values], textposition="top center",
+                             textfont=dict(size=11, color="#111827"),
+                             hovertemplate="%{y:,.0f} 천㎥<extra>" + label + "</extra>"))
+    if out_mask.any():
+        fig.add_trace(go.Scatter(x=[months[m - 1] for m in out_mask.index[out_mask]], y=contract[out_mask].values,
+                                 mode="markers", name="범위 이탈",
+                                 marker=dict(size=16, symbol="x", color="#D93025", line=dict(width=3, color="#D93025")),
+                                 hoverinfo="skip"))
+    fig.update_layout(height=560, plot_bgcolor="white", hovermode="x unified", margin=dict(l=10, r=10, t=50, b=10),
+                      xaxis=dict(showgrid=False, showline=False, tickfont=dict(color="#80868B", size=12)),
+                      yaxis=dict(title=dict(text="월별 총량 (천㎥)", font=dict(color="#80868B", size=12)), tickformat=",",
+                                 gridcolor="rgba(148,163,184,0.20)", zeroline=False, showline=False,
+                                 tickfont=dict(color="#80868B", size=11)),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=12)))
+    return fig
+
+
+def run_tab3_contract():
+    if not _contract_pw_gate():
+        return
+
+    st.sidebar.header("📂 [약정물량] 데이터 파일")
+    up = st.sidebar.file_uploader("약정물량 엑셀 업로드", type=["xlsx"], key="u3")
+    file_bytes = None
+    if up is not None:
+        file_bytes = up.getvalue()
+        st.sidebar.success("✅ 약정물량 파일 로드 성공")
+    else:   # 업로드가 없으면 앱 폴더의 '약정' 엑셀을 찾아 사용
+        cands = sorted(Path(__file__).parent.glob("*약정*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if cands:
+            file_bytes = cands[0].read_bytes()
+            st.sidebar.info(f"ℹ️ 기본 약정물량 파일 사용 ({cands[0].name})")
+
+    st.title("📑 약정물량 분석")
+    if file_bytes is None:
+        st.info("👈 좌측 사이드바에서 약정물량 엑셀 파일을 업로드해주세요.")
+        return
+    cd = parse_contract_excel(file_bytes)
+    if cd is None:
+        st.error("약정물량 엑셀에서 '1월~12월' 표를 찾지 못했습니다. (작성양식 시트의 월별 표 형식을 확인하세요)")
+        return
+
+    piv, src = load_monthly_m3_history()
+    if piv is None or piv.empty:
+        st.error("과거 월별 공급량(m³) 자료를 읽지 못했습니다. (구글시트 '공급량(M3)' 열 또는 분석 엑셀 확인)")
+        return
+
+    full_years = [int(y) for y in piv.index if piv.loc[y].notna().all()]   # 12개월 모두 완결된 연도만
+    if len(full_years) < 2:
+        st.error("12개월이 모두 집계된 과거 연도가 부족합니다.")
+        return
+    y_max = max(full_years)
+    y_min = min(full_years)
+    c1, c2 = st.columns([2, 3])
+    with c1:
+        yr_range = st.slider("과거 연도 범위", min_value=y_min, max_value=y_max,
+                             value=(max(y_min, y_max - 9), y_max), step=1, key="contract_yr_range")
+    sel_years = [y for y in full_years if yr_range[0] <= y <= yr_range[1]]
+    hist = piv.loc[sel_years]
+    contract = cd["total"].copy()
+    contract.index = range(1, 13)
+    label = f"{cd['year']}년 약정물량" if cd["year"] else "약정물량"
+
+    mx, mn, avg = hist.max(), hist.min(), hist.mean()
+    over = contract > mx
+    under = contract < mn
+    out_mask = over | under
+
+    with c2:
+        st.markdown(f"<div style='padding-top:28px;font-size:14px;color:#666;'>"
+                    f"{cd['company'] or ''} · {label} (단위: 천N㎥) vs 과거 {len(sel_years)}개 연도 "
+                    f"({sel_years[0]}~{sel_years[-1]}년) 실적(천m³) · 출처: {src}</div>", unsafe_allow_html=True)
+
+    if out_mask.any():
+        bad = ", ".join(f"{m}월({'초과' if over[m] else '미달'})" for m in out_mask.index[out_mask])
+        st.error(f"🚨 과거 {len(sel_years)}년 최대·최소 범위를 벗어난 월이 있습니다: {bad}")
+    else:
+        st.success(f"✅ 1~12월 약정물량이 모두 과거 {len(sel_years)}년 최대·최소 범위 안에 있습니다.")
+
+    st.plotly_chart(build_contract_figure(contract, hist, mx, mn, out_mask, label), use_container_width=True)
+
+    cmp_df = pd.DataFrame({
+        "월": [f"{m}월" for m in range(1, 13)],
+        f"{label}(천㎥)": contract.values,
+        "과거 최소(천㎥)": mn.values, "과거 평균(천㎥)": avg.values, "과거 최대(천㎥)": mx.values,
+        "판정": ["최대 초과" if over[m] else ("최소 미달" if under[m] else "범위 내") for m in range(1, 13)],
+        "벗어난 양(천㎥)": [(contract[m] - mx[m]) if over[m] else ((contract[m] - mn[m]) if under[m] else 0.0)
+                        for m in range(1, 13)],
+        "평균 대비(%)": ((contract / avg - 1) * 100).values,
+    })
+    tot = {"월": "합계", f"{label}(천㎥)": contract.sum(), "과거 최소(천㎥)": mn.sum(),
+           "과거 평균(천㎥)": avg.sum(), "과거 최대(천㎥)": mx.sum(), "판정": "", "벗어난 양(천㎥)": np.nan,
+           "평균 대비(%)": (contract.sum() / avg.sum() - 1) * 100}
+    show_df = pd.concat([cmp_df, pd.DataFrame([tot])], ignore_index=True)
+
+    def _hl(row):
+        if row["판정"] in ("최대 초과", "최소 미달"):
+            return ["background-color: #FFD6D6; font-weight: bold"] * len(row)
+        if row["월"] == "합계":
+            return ["background-color: #F0F2F6; font-weight: bold"] * len(row)
+        return [""] * len(row)
+
+    num_cols = [c for c in show_df.columns if "천㎥" in c]
+    st.dataframe(
+        show_df.style.apply(_hl, axis=1).format({**{c: "{:,.0f}" for c in num_cols}, "평균 대비(%)": "{:+.1f}%"}, na_rep="-")
+               .set_properties(**{"text-align": "center"})
+               .set_table_styles([dict(selector="th", props=[("text-align", "center")])]),
+        use_container_width=True, hide_index=True)
+    st.caption("※ 단위는 약정물량 천N㎥, 과거 실적 천m³이며 동일 단위로 간주해 비교했습니다. 해당 월의 일별 자료가 모두 있는 연도만 포함합니다.")
+
+    with st.expander("과거 연도별 월별 총량(천m³) 보기"):
+        hist_show = hist.copy()
+        hist_show.index = [f"{int(y)}년" for y in hist_show.index]
+        hist_show.columns = [f"{m}월" for m in range(1, 13)]
+        st.dataframe(hist_show.style.format("{:,.0f}"), use_container_width=True)
+    with st.expander("업종별 약정물량(천N㎥) 보기"):
+        det = cd["detail"].copy()
+        det.columns = [f"{m}월" for m in range(1, 13)]
+        det["소계"] = det.sum(axis=1)
+        st.dataframe(det.style.format("{:,.0f}"), use_container_width=True)
+
+    # 엑셀 다운로드: 비교표 / 과거 연도별 월별 총량 / 업종별 약정물량
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        cmp_df.to_excel(writer, sheet_name="약정vs과거범위", index=False)
+        h2 = hist.copy()
+        h2.index.name = "연도"
+        h2.columns = [f"{m}월" for m in range(1, 13)]
+        h2.reset_index().to_excel(writer, sheet_name="과거월별총량(천m3)", index=False)
+        d2 = cd["detail"].copy()
+        d2.columns = [f"{m}월" for m in range(1, 13)]
+        d2.index.name = "업종"
+        d2.reset_index().to_excel(writer, sheet_name="업종별약정물량(천Nm3)", index=False)
+    st.download_button("💾 약정물량 분석 데이터 엑셀 저장", buf.getvalue(),
+                       f"약정물량_분석_{cd['year'] or ''}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+# ==============================================================================
 # [메인 실행] 사이드바 네비게이션
 # ==============================================================================
 st.sidebar.title("통합 메뉴")
-menu = st.sidebar.radio("이동", ["1. 도시가스 공급실적 관리", "2. 공급량 분석"])
+menu = st.sidebar.radio("이동", ["1. 도시가스 공급실적 관리", "2. 공급량 분석", "3. 약정물량"])
 
 if menu == "1. 도시가스 공급실적 관리":
     run_tab1_management()
-else:
+elif menu == "2. 공급량 분석":
     run_tab2_analysis()
+else:
+    run_tab3_contract()
