@@ -1634,7 +1634,7 @@ def run_tab2_analysis():
                 st.warning("최저기온 데이터를 가져오지 못했습니다. (구글시트 '최저' 열과 기상청 API 모두 값이 없음)")
 
             # 팔레트: 과거=라이트 그레이(#BEBEBE), 기준연도=블루(#005AC8), 평균기온=앰버, 최저기온=틸, 가정용 청구전수=스카이 블루
-            C_PAST, C_SEL, C_AVG, C_MIN, C_TXT = "#D8DBE0", "#1A73E8", "#F5A800", "#34A853", "#5F6368"
+            C_PAST, C_SEL, C_AVG, C_MIN, C_TXT = "#D8DBE0", "#2563EB", "#F5A800", "#34A853", "#5F6368"   # C_SEL: 기준연도 로열 블루
             C_AVG_TXT, C_MIN_TXT = "#B97A00", "#1E7B3A"          # 기온 라벨 글자색(회색 막대 위)
             C_AVG_TXT_SEL, C_MIN_TXT_SEL = "#FFE9A8", "#C8F0D3"  # 기준연도(진한 파랑 막대) 위에서는 밝은 글자색
             C_HH, C_HH_TXT = "#A142F4", "#7A2FC0"
@@ -1740,10 +1740,10 @@ def run_tab2_analysis():
                     fig_cum.add_trace(
                         go.Bar(
                             x=[sel_label], y=[exp_info["rem"]], base=[exp_info["act"]], name="예상(남은 기간 계획)",
-                            marker=dict(color="rgba(26,115,232,0.35)", line=dict(color=C_SEL, width=1.5),
+                            marker=dict(color="rgba(37,99,235,0.22)", line=dict(color=C_SEL, width=1.5),
                                         pattern=dict(shape="/", fgcolor=C_SEL, size=6)),
                             text=[f"<b>예상 {exp_info['exp']:,.0f}</b><br>계획대비 {exp_info['rate']:.1f}%"],
-                            textposition="outside", textfont=dict(color=C_SEL, size=12),
+                            textposition="outside", textfont=dict(color=C_SEL, size=16),   # 12 → 16 (약 30% 확대)
                             hovertemplate=(f"{sel_label} 예상<br>실적 {exp_info['act']:,.0f} + 계획 {exp_info['rem']:,.0f}"
                                            f" = {exp_info['exp']:,.0f} GJ<extra></extra>"),
                         ),
@@ -1778,13 +1778,16 @@ def run_tab2_analysis():
                 add_temp_line("평균기온(℃)", "평균기온", C_AVG, C_AVG_TXT, C_AVG_TXT_SEL, "solid", "circle", "y2")
                 # 2026 사업계획 월 평균기온: 2026년 막대에만 빨간 점선 + 온도 표기 (평균기온선과 같은 보조축 y2)
                 if plan_temp is not None:
-                    fig_cum.add_shape(
-                        type="line", xref="x", yref="y2",
-                        x0=plan_idx - 0.4, x1=plan_idx + 0.4, y0=float(plan_temp), y1=float(plan_temp),
-                        line=dict(color="#D93025", width=3, dash="dot"), layer="above",
-                    )
+                    # 도형은 항상 그래프 선 위에 그려지므로, 평균기온 점·라벨이 있는 가운데(±0.17)는 비우고
+                    # 좌·우 두 토막으로 그려서 현재 평균기온이 가려지지 않게 함
+                    for _x0, _x1 in ((plan_idx - 0.45, plan_idx - 0.17), (plan_idx + 0.17, plan_idx + 0.45)):
+                        fig_cum.add_shape(
+                            type="line", xref="x", yref="y2",
+                            x0=_x0, x1=_x1, y0=float(plan_temp), y1=float(plan_temp),
+                            line=dict(color="#D93025", width=3, dash="dot"), layer="above",
+                        )
                     fig_cum.add_annotation(
-                        xref="x", yref="y2", x=plan_idx + 0.43, y=float(plan_temp), xanchor="left", yanchor="middle",
+                        xref="x", yref="y2", x=plan_idx + 0.48, y=float(plan_temp), xanchor="left", yanchor="middle",
                         text=f"<b>계획 {plan_temp:.1f}℃</b>", showarrow=False,
                         font=dict(color="#D93025", size=13),
                     )
