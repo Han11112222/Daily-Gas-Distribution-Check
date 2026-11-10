@@ -17,20 +17,7 @@ from typing import Dict, List, Optional, Tuple
 # ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="도시가스 통합 관리 시스템", layout="wide")
 
-# [스타일] CSS 적용
-st.markdown("""
-   <style>
-   div[data-testid="stMetric"] {
-       background-color: #F0F2F6;
-       border-radius: 10px;
-       padding: 15px;
-       min-height: 200px;
-       display: flex;
-       flex-direction: column;
-       justify-content: center;
-    }
-   </style>
-""", unsafe_allow_html=True)
+# (달성률 카드는 아래 kpi_card()로 직접 그립니다)
 
 def set_korean_font():
     ttf = Path(__file__).parent / "NanumGothic-Regular.ttf"
@@ -351,9 +338,182 @@ def load_temperature_sheet():
             )
         else:
             df["최저기온(℃)"] = np.nan
-        return df[["일자", "연도", "월", "일", "평균기온(℃)", "최저기온(℃)"]]
+        # 공급량(M3): 이상기온 판별 그래프의 점 크기용 (정확히 '공급량(M3)' 열 우선, 없으면 '실적…M3' 열)
+        m3_src = "공급량(M3)" if "공급량(M3)" in df.columns else next(
+            (c for c in df.columns if "실적" in c and "M3" in c.upper()), None)
+        df["공급량(M3)"] = (pd.to_numeric(df[m3_src].astype(str).str.replace(",", ""), errors="coerce")
+                          if m3_src is not None else np.nan)
+        return df[["일자", "연도", "월", "일", "평균기온(℃)", "최저기온(℃)", "공급량(M3)"]]
     except Exception:
         return None
+
+
+# ─────────────────────────────────────────────────────────
+# [공통 함수 3-1] 이상기온 판별 (한국가스공사 기준)
+#  - 과거 7년 중 최고·최저를 뺀 5년의 평균·표준편차를 구해, |기준값 - 5년평균| > 표준편차 이면 이상기온
+#  - 월 판별: 월 평균기온 / 일 판별: 같은 월·일의 과거 7년 일평균기온
+# ─────────────────────────────────────────────────────────
+ABN_BG = {"high": "#FFD6D6", "low": "#D4E6FF", "normal": "#F0F2F6", None: "#F0F2F6"}   # 카드 배경(이상고온=붉은색, 이상저온=푸른색)
+ABN_TXT = {"high": "#C62828", "low": "#1565C0", "normal": "#31333F", None: "#31333F"}
+ABN_LABEL = {"high": "이상고온 ▲", "low": "이상저온 ▼", "normal": "정상", None: "-"}
+
+
+def _five_year_judge(curr: float, past: pd.Series):
+    """past: 과거 7년 값(index=연도). 반환: dict 또는 None"""
+    past = past.dropna()
+    if len(past) < 7:
+        return None
+    p5 = past.drop(index=[past.idxmax(), past.idxmin()])
+    mean5 = round(float(p5.mean()), 1)
+    std5 = float(np.sqrt(np.sum((p5 - mean5) ** 2) / 5))
+    is_abn = abs(curr - mean5) > std5
+    kind = ("high" if curr > mean5 else "low") if is_abn else "normal"
+    return dict(curr=curr, mean7=float(past.mean()), mean5=mean5, std5=std5,
+                lower=mean5 - std5, upper=mean5 + std5, is_abnormal=is_abn, kind=kind, past=past)
+
+
+def abnormal_month_stats(ts, year: int, month: int, upto_day=None):
+    """월 평균기온 이상기온 판별. upto_day를 주면 모든 연도를 1~upto_day일 평균으로 비교(같은 기간 비교)."""
+    if ts is None or ts.empty:
+        return None
+    d = ts[ts["월"] == month]
+    if upto_day is not None:
+        d = d[d["일"] <= upto_day]
+    avg = d.groupby("연도")["평균기온(℃)"].mean().dropna()
+    if year not in avg.index:
+        return None
+    res = _five_year_judge(round(float(avg[year]), 1), avg[(avg.index >= year - 7) & (avg.index < year)])
+    if res is None:
+        return None
+    res["supply"] = d.groupby("연도")["공급량(M3)"].sum(min_count=1).to_dict()
+    res["avg_all"] = avg
+    res["year"], res["month"], res["upto_day"] = year, month, upto_day
+    return res
+
+
+def abnormal_day_stats(ts, date, temp):
+    """조회일 평균기온이 같은 월·일의 과거 7년 대비 이상기온인지 판별"""
+    if ts is None or ts.empty or temp is None or pd.isna(temp):
+        return None
+    d = ts[(ts["월"] == date.month) & (ts["일"] == date.day) &
+           (ts["연도"] >= date.year - 7) & (ts["연도"] < date.year)]
+    past = d.dropna(subset=["평균기온(℃)"]).drop_duplicates("연도", keep="last").set_index("연도")["평균기온(℃)"]
+    return _five_year_judge(round(float(temp), 1), past)
+
+
+def build_abnormal_figure(st_m: dict) -> go.Figure:
+    """과거 7년(회색 원) · 작년(보라 마름모) · 기준연도(주황 원)를 5년 평균±표준편차 밴드 위에 표시. 점 크기 = 공급량"""
+    year, past = st_m["year"], st_m["past"]
+    supply = st_m["supply"]
+
+    def get_supply(y):
+        v = supply.get(y)
+        return 0 if v is None or pd.isna(v) else float(v)
+
+    valid = [get_supply(y) for y in st_m["avg_all"].index if get_supply(y) > 0]
+    max_s, min_s = (max(valid), min(valid)) if valid else (1, 0)
+
+    def scale_size(v):
+        if v == 0 or max_s == min_s:
+            return 15
+        return 15 + ((v - min_s) / (max_s - min_s)) * 35
+
+    lower, upper, mean5, curr = st_m["lower"], st_m["upper"], st_m["mean5"], st_m["curr"]
+    fig = go.Figure()
+    fig.add_vrect(x0=lower, x1=upper, fillcolor="#00BFFF", opacity=0.1, layer="below",
+                  line_width=1, line_dash="solid", line_color="#00BFFF")
+    fig.add_annotation(x=lower, y=0.9, text=f"<b>하한: {lower:.2f}℃</b>", showarrow=False,
+                       font=dict(color="#00BFFF", size=13), xanchor="right", yanchor="top")
+    fig.add_annotation(x=upper, y=0.9, text=f"<b>상한: {upper:.2f}℃</b>", showarrow=False,
+                       font=dict(color="#00BFFF", size=13), xanchor="left", yanchor="top")
+    fig.add_vline(x=mean5, line=dict(color="#2ca02c", width=2, dash="dash"),
+                  annotation_text=f"5년 평균 ({mean5:.1f}℃)", annotation_position="bottom right",
+                  annotation_font=dict(color="#2ca02c"))
+
+    sizes, texts, xs = [], [], []
+    for y, t in past.items():
+        y = int(y)
+        if y == year - 1:
+            continue
+        sv = get_supply(y)
+        sizes.append(scale_size(sv))
+        texts.append(f"<b>{y}년</b><br>평균기온: {t:.1f}℃<br>공급량: {sv:,.0f} M3")
+        xs.append(t)
+    fig.add_trace(go.Scatter(
+        x=xs, y=[0] * len(xs), mode="markers", name="과거 7년",
+        marker=dict(size=sizes, color="rgba(128, 128, 128, 0.5)", line=dict(color="gray", width=1)),
+        hoverinfo="text", text=texts))
+
+    y1 = year - 1
+    if y1 in past.index:
+        y1v, y1s = float(past[y1]), get_supply(y1)
+        fig.add_trace(go.Scatter(
+            x=[y1v], y=[0], mode="markers+text", name=f"작년({y1}년)",
+            marker=dict(size=scale_size(y1s), color="#9467bd", symbol="diamond", line=dict(color="white", width=2)),
+            text=[f"<b>{y1}년 ({y1v:.1f}℃)</b>"], textposition="top center", textfont=dict(size=13, color="#9467bd"),
+            hoverinfo="text", hovertext=f"<b>{y1}년</b><br>평균기온: {y1v:.1f}℃<br>공급량: {y1s:,.0f} M3"))
+
+    cs = get_supply(year)
+    fig.add_trace(go.Scatter(
+        x=[curr], y=[0], mode="markers+text", name=f"{year}년",
+        marker=dict(size=scale_size(cs), color="#FF8C00", symbol="circle", line=dict(color="white", width=2)),
+        text=[f"<b>{year}년 ({curr}℃)</b>"], textposition="bottom center", textfont=dict(size=15, color="#FF8C00"),
+        hoverinfo="text", hovertext=f"<b>{year}년</b><br>평균기온: {curr:.1f}℃<br>공급량: {cs:,.0f} M3"))
+
+    fig.update_layout(
+        height=320,
+        yaxis=dict(showticklabels=False, range=[-1.3, 1.3], showgrid=False, zeroline=False),
+        xaxis=dict(title="평균기온(℃)", gridcolor="#f0f0f0", showline=True, linecolor="lightgray"),
+        showlegend=False, margin=dict(l=40, r=40, t=20, b=40), plot_bgcolor="white")
+    return fig
+
+
+def render_abnormal_section(st_m, month: int, same_window: bool, upto_day: int):
+    """[열량 실적 하단] 이상기온 판별 상세 (한국가스공사 기준)"""
+    st.header(f"🚨 {month}월 이상기온 판별 상세 (한국가스공사 기준)")
+    st.toggle(f"같은 기간(1~{upto_day}일)끼리 비교", value=False, key="abn_same_window",
+              help="끄면 당월은 현재까지 평균, 과거 연도는 월 전체 평균과 비교합니다(기존 방식). "
+                   "켜면 과거 연도도 같은 1~N일 평균으로 비교해 월 중간에도 공정하게 판별합니다.")
+    if st_m is None:
+        st.info("이상기온 판별에 필요한 과거 7년 기온 자료가 부족하거나 구글시트 기온을 읽지 못했습니다.")
+        return
+    yr, mo = st_m["year"], st_m["month"]
+    if st_m["is_abnormal"]:
+        st.error(f"🚨 **주의:** {yr}년 {mo}월은 가스공사 기준 **'이상기온'**으로 판별되었습니다! (도시가스 실적 변동에 유의하세요)", icon="🚨")
+    else:
+        st.success(f"✅ {yr}년 {mo}월은 가스공사 기준 **'정상 기온'** 범위 내에 있습니다.", icon="✅")
+    st.write("")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("최근 7년 평균", f"{st_m['mean7']:.1f}℃")
+    c2.metric("5년 평균 (최대/최소 제외)", f"{st_m['mean5']:.1f}℃")
+    c3.metric("5년 표준편차", f"{st_m['std5']:.2f}")
+    c4.metric(f"기준 연도({yr}) 평균", f"{st_m['curr']:.1f}℃",
+              delta="이상기온 발생!" if st_m["is_abnormal"] else "정상 범위",
+              delta_color="inverse" if st_m["is_abnormal"] else "normal")
+    st.plotly_chart(build_abnormal_figure(st_m), use_container_width=True)
+    if same_window:
+        st.caption(f"※ 모든 연도를 {mo}월 1~{upto_day}일 평균기온으로 비교했습니다. 점 크기=같은 기간 공급량(M3)")
+    else:
+        st.caption(f"※ {yr}년은 현재까지 자료 평균, 과거 연도는 {mo}월 전체 평균입니다. 점 크기=월 공급량(M3). "
+                   "월 초·중순에는 위 '같은 기간 비교'를 켜면 더 정확합니다.")
+
+
+def kpi_card(label: str, rate: float, value_txt: str, delta_val: float, plan_txt: str,
+             bg: str = "#F0F2F6", right_html: str = "") -> str:
+    """달성률 카드(HTML). 달성률은 기존 라벨(14px)의 2배(28px)로 표시, 배경색은 이상기온 판별 결과에 따라 변경"""
+    up = delta_val >= 0
+    d_color, d_bg = ("#09AB3B", "rgba(33,195,84,0.12)") if up else ("#FF2B2B", "rgba(255,43,43,0.10)")
+    arrow = "↑" if up else "↓"
+    return (
+        f'<div style="background:{bg};border-radius:10px;padding:18px 20px;min-height:200px;display:flex;'
+        f'justify-content:space-between;align-items:center;gap:12px;">'
+        f'<div><div style="font-size:28px;line-height:1.3;color:#31333F;">{label} <b>{rate:.1f}%</b></div>'
+        f'<div style="font-size:36px;line-height:1.3;color:#31333F;margin-top:6px;">{value_txt}</div>'
+        f'<div style="margin-top:6px;"><span style="font-size:14px;color:{d_color};background:{d_bg};'
+        f'border-radius:12px;padding:2px 8px;">{arrow} {delta_val:+,.0f} GJ</span></div>'
+        f'<div style="font-size:13px;color:#808495;margin-top:10px;">{plan_txt}</div></div>'
+        f'{right_html}</div>'
+    )
 
 
 # ─────────────────────────────────────────────────────────
@@ -1001,14 +1161,34 @@ def run_tab1_management():
             rank_text = f"{firecracker} 🏆 역대 전체: {int(rank_all)}위  /  📅 역대 {target_date.month}월: {int(rank_month)}위"
             if rank_all == 1: is_top_rank = True
 
+    # ── 이상기온 판별 (일: 같은 월·일 과거 7년 / 월: 월 평균기온) → 카드 배경색에 반영 ──
+    ts_abn = load_temperature_sheet()
+    same_win = bool(st.session_state.get("abn_same_window", False))
+    stat_m = abnormal_month_stats(ts_abn, target_date.year, target_date.month,
+                                  target_date.day if same_win else None)
+    day_temp = current_row['평균기온(℃)'].iloc[0] if '평균기온(℃)' in current_row.columns else np.nan
+    stat_d = abnormal_day_stats(ts_abn, target_date, day_temp)
+    kind_d = stat_d["kind"] if stat_d else None
+    kind_m = stat_m["kind"] if stat_m else None
+
     st.markdown("### 🔥 열량 실적 (GJ)")
     col_g1, col_g2, col_g3 = st.columns(3)
-    
+
     with col_g1:
         diff_gj = current_val_gj - plan_val_gj
         rate_gj = (current_val_gj / plan_val_gj * 100) if plan_val_gj > 0 else 0
-        st.metric(label=f"일간 달성률 {rate_gj:.1f}%", value=f"{int(current_val_gj):,} GJ", delta=f"{int(diff_gj):+,} GJ")
-        st.caption(f"계획: {int(plan_val_gj):,} GJ")
+        t_txt = f"{float(day_temp):.1f}℃" if pd.notna(day_temp) else "-"
+        norm_txt = (f"평년 {stat_d['mean5']:.1f}℃ (정상 {stat_d['lower']:.1f}~{stat_d['upper']:.1f})"
+                    if stat_d else "")
+        temp_html = (
+            f'<div style="text-align:right;min-width:150px;">'
+            f'<div style="font-size:14px;color:#555;">🌡 {target_date.month}/{target_date.day} 평균기온</div>'
+            f'<div style="font-size:40px;font-weight:700;line-height:1.2;color:{ABN_TXT[kind_d]};">{t_txt}</div>'
+            f'<div style="font-size:15px;font-weight:700;color:{ABN_TXT[kind_d]};">{ABN_LABEL[kind_d]}</div>'
+            f'<div style="font-size:12px;color:#777;">{norm_txt}</div></div>'
+        )
+        st.markdown(kpi_card("일간 달성률", rate_gj, f"{int(current_val_gj):,} GJ", diff_gj,
+                             f"계획: {int(plan_val_gj):,} GJ", ABN_BG[kind_d], temp_html), unsafe_allow_html=True)
         if rank_text:
             st.markdown(f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span><br><span style='font-size: 150%; color: black;'>(2014년 1월 1일 이후 랭킹)</span>", unsafe_allow_html=True)
             if is_top_rank:
@@ -1020,16 +1200,30 @@ def run_tab1_management():
         mtd_data = df[mask_mtd]
         a_mtd, p_mtd = mtd_data['실적(GJ)'].sum(), mtd_data['계획(GJ)'].sum()
         rate_mtd = (a_mtd/p_mtd*100) if p_mtd > 0 else 0
-        st.metric(label=f"월간 누적 달성률 {rate_mtd:.1f}%", value=f"{int(a_mtd):,} GJ", delta=f"{int(a_mtd-p_mtd):+,} GJ")
-        st.caption(f"누적 계획: {int(p_mtd):,} GJ")
+        if stat_m:
+            m_html = (
+                f'<div style="text-align:right;min-width:130px;">'
+                f'<div style="font-size:13px;color:#555;">🌡 {target_date.month}월 평균기온</div>'
+                f'<div style="font-size:26px;font-weight:700;line-height:1.2;color:{ABN_TXT[kind_m]};">{stat_m["curr"]:.1f}℃</div>'
+                f'<div style="font-size:14px;font-weight:700;color:{ABN_TXT[kind_m]};">{ABN_LABEL[kind_m]}</div>'
+                f'<div style="font-size:12px;color:#777;">평년 {stat_m["mean5"]:.1f}℃</div></div>'
+            )
+        else:
+            m_html = ""
+        st.markdown(kpi_card("월간 누적 달성률", rate_mtd, f"{int(a_mtd):,} GJ", a_mtd - p_mtd,
+                             f"누적 계획: {int(p_mtd):,} GJ", ABN_BG[kind_m], m_html), unsafe_allow_html=True)
 
     with col_g3:
         mask_ytd = (df['날짜'].dt.year == target_date.year) & (df['날짜'] <= target_date)
         ytd_data = df[mask_ytd]
         a_ytd, p_ytd = ytd_data['실적(GJ)'].sum(), ytd_data['계획(GJ)'].sum()
         rate_ytd = (a_ytd/p_ytd*100) if p_ytd > 0 else 0
-        st.metric(label=f"연간 누적 달성률 {rate_ytd:.1f}%", value=f"{int(a_ytd):,} GJ", delta=f"{int(a_ytd-p_ytd):+,} GJ")
-        st.caption(f"누적 계획: {int(p_ytd):,} GJ")
+        st.markdown(kpi_card("연간 누적 달성률", rate_ytd, f"{int(a_ytd):,} GJ", a_ytd - p_ytd,
+                             f"누적 계획: {int(p_ytd):,} GJ"), unsafe_allow_html=True)
+
+    # ── [열량 실적 하단] 이상기온 판별 상세 ──
+    st.markdown("<br>", unsafe_allow_html=True)
+    render_abnormal_section(stat_m, target_date.month, same_win, target_date.day)
 
     st.markdown("---")
     st.subheader(f"📝 {target_date.month}월 실적 입력")
@@ -1606,13 +1800,14 @@ def run_tab2_analysis():
             cum_df = pd.DataFrame(cum_rows)
 
             # 예상 실적: 마지막 실적일까지 실적 + 남은 기간 일일계획량 = 당월 말일 예상
-            exp_info = None
-            if show_exp and f"{sel_year}년" in cum_df["연도"].values:
+            plan_stat = None   # 계획 대비 통계(항상 계산) / exp_info는 '예상 실적' 토글이 켜졌을 때만 사용
+            if f"{sel_year}년" in cum_df["연도"].values:
                 pm = None
                 if plan_df is not None and not this_df.empty:
                     pm = plan_df[(plan_df["날짜"].dt.year == sel_year) & (plan_df["날짜"].dt.month == sel_month)]
                 if pm is None or pm.empty:
-                    st.info(f"{sel_year}년 {sel_month}월 계획 데이터가 없어 예상 실적을 계산할 수 없습니다.")
+                    if show_exp:
+                        st.info(f"{sel_year}년 {sel_month}월 계획 데이터가 없어 예상 실적을 계산할 수 없습니다.")
                 else:
                     last_act = this_df["일자"].max()
                     act_gj = float(this_df[act_col].sum() / 1000.0)
@@ -1620,7 +1815,7 @@ def run_tab2_analysis():
                     plan_to_date = float(pm.loc[pm["날짜"] <= last_act, "plan_gj"].sum())
                     rem = pm[pm["날짜"] > last_act]
                     rem_gj = float(rem["plan_gj"].sum())
-                    exp_info = dict(
+                    plan_stat = dict(
                         act=act_gj, rem=rem_gj, exp=act_gj + rem_gj, plan_month=plan_month_gj,
                         rate=(act_gj + rem_gj) / plan_month_gj * 100 if plan_month_gj > 0 else 0.0,
                         cur_rate=act_gj / plan_to_date * 100 if plan_to_date > 0 else 0.0,
@@ -1628,6 +1823,7 @@ def run_tab2_analysis():
                         rem_txt=(f"{int(rem['날짜'].dt.day.min())}~{int(rem['날짜'].dt.day.max())}일 ({len(rem)}일)"
                                  if not rem.empty else "남은 기간 없음"),
                     )
+            exp_info = plan_stat if show_exp else None
             top_val = max(float(cum_df["누적공급량(GJ)"].max()), exp_info["exp"] if exp_info else 0.0)
 
             if show_min and cum_df["최저기온(℃)"].isna().all():
@@ -1728,7 +1924,12 @@ def run_tab2_analysis():
                     go.Bar(
                         x=cum_df["연도"], y=cum_df["누적공급량(GJ)"],
                         name="누적 공급량(GJ)", marker_color=bar_colors,
-                        text=[("" if (exp_info and c == sel_label) else f"{v:,.0f}") for c, v in zip(cum_df["연도"], cum_df["누적공급량(GJ)"])],
+                        text=[
+                            ("" if (exp_info and c == sel_label)
+                             else (f"{v:,.0f}<br><b>계획대비 {plan_stat['cur_rate']:.1f}%</b>" if (plan_stat and c == sel_label)
+                                   else f"{v:,.0f}"))
+                            for c, v in zip(cum_df["연도"], cum_df["누적공급량(GJ)"])
+                        ],
                         textposition="outside",
                         textfont=dict(color=C_TXT, size=12),
                         hovertemplate="%{x}<br>누적: %{y:,.0f} GJ<extra></extra>",
