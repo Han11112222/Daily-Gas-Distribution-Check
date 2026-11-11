@@ -2781,6 +2781,7 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
 
     st.plotly_chart(build_contract_figure(contract, hist, mx, mn, out_mask, label, revised, rev_out),
                     use_container_width=True,
+                    config={"scrollZoom": True, "displaylogo": False},   # 마우스 휠로 확대·축소
                     key=f"{key}_chart")
 
     cmp_df = pd.DataFrame({
@@ -2834,18 +2835,58 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
     return dict(cmp=cmp_df, hist=h2.reset_index())
 
 
+def _intake_sheet_name(src) -> Optional[str]:
+    """엑셀에 '인수량…' 시트가 있으면 그 이름을 반환 (src: 경로 또는 bytes)"""
+    try:
+        xls = pd.ExcelFile(io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else src, engine="openpyxl")
+        return next((n for n in xls.sheet_names if n.replace(" ", "").startswith("인수량")), None)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner=False)
+def parse_intake_excel(file_bytes: bytes, exclude_year: Optional[int] = None):
+    """가스공사 인수량 엑셀('인수량(㎥)' 시트 첫 표: 'YYYY년' 행 × 1~12월, 단위 ㎥) → 연×월 DataFrame(천m³)"""
+    try:
+        xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
+        sn = next((n for n in xls.sheet_names if n.replace(" ", "").startswith("인수량")), None)
+        if sn is None:
+            return None
+        raw = xls.parse(sn, header=None)
+    except Exception:
+        return None
+    recs, started = {}, False
+    for i in range(len(raw)):
+        lab = "" if pd.isna(raw.iat[i, 0]) else str(raw.iat[i, 0]).replace(" ", "")
+        m = re.match(r"^(\d{4})년$", lab)
+        if m:
+            started = True
+            y = int(m.group(1))
+            if exclude_year is not None and y == exclude_year:
+                continue
+            vals = [pd.to_numeric(raw.iat[i, c], errors="coerce") for c in range(1, 13)]
+            recs[y] = [float(v) / 1000.0 if pd.notna(v) and v > 0 else np.nan for v in vals]   # ㎥ → 천m³
+        elif started:
+            break      # 첫 번째 연도 표가 끝나면 중단 (아래 비교표는 사용 안 함)
+    if not recs:
+        return None
+    piv = pd.DataFrame(recs, index=range(1, 13)).T
+    return piv.dropna(how="all")
+
+
 def run_tab3_contract():
     if not _contract_pw_gate():
         return
 
     st.sidebar.header("📂 [약정물량] 데이터 파일")
     up = st.sidebar.file_uploader("약정물량 엑셀 업로드", type=["xlsx"], key="u3")
+    up_in = st.sidebar.file_uploader("인수량 엑셀 업로드 (선택)", type=["xlsx"], key="u3_intake")
     file_bytes = None
     if up is not None:
         file_bytes = up.getvalue()
         st.sidebar.success("✅ 약정물량 파일 로드 성공")
     else:   # 업로드가 없으면 앱 폴더의 '약정' 엑셀을 찾아 사용
-        cands = sorted(Path(__file__).parent.glob("*약정*.xlsx"),
+        cands = sorted([p for p in Path(__file__).parent.glob("*약정*.xlsx") if _intake_sheet_name(p) is None],
                        key=lambda p: ("ver2" in p.name.lower(), p.stat().st_mtime), reverse=True)
         if cands:
             file_bytes = cands[0].read_bytes()
@@ -2870,6 +2911,22 @@ def run_tab3_contract():
                  "1행(수급량 GJ)·6행(YYYY-MM) 위치가 맞는지 확인해주세요.")
     else:
         res2 = _render_contract_version("contract_v2", piv2, "구글시트 상품별 공급량 재분배 1행 ÷ 42.563", cd, label)
+    res3 = None
+    st.markdown("---")
+    if st.toggle("인수량(㎥) 기준으로도 함께 보기", value=False, key="show_intake"):
+        in_bytes = up_in.getvalue() if up_in is not None else None
+        if in_bytes is None:     # 업로드가 없으면 앱 폴더에서 '인수량' 시트가 있는 엑셀을 찾음
+            for p in sorted(Path(__file__).parent.glob("*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True):
+                if _intake_sheet_name(p) is not None:
+                    in_bytes = p.read_bytes()
+                    st.caption(f"ℹ️ 인수량 파일: {p.name}")
+                    break
+        piv3 = parse_intake_excel(in_bytes, cd["year"]) if in_bytes else None
+        if piv3 is None or piv3.empty:
+            st.info("인수량 엑셀('인수량(㎥)' 시트)을 찾지 못했습니다. GitHub의 앱 폴더에 올리거나 사이드바에서 업로드해주세요.")
+        else:
+            st.header("인수량 기준 (가스공사 인수량 ㎥ ÷ 1,000 → 천m³)")
+            res3 = _render_contract_version("contract_v3", piv3, "가스공사 인수량 엑셀(㎥÷1,000)", cd, label)
     st.caption("※ 약정은 천N㎥, 과거 실적은 천m³이며 동일 단위로 간주했습니다. 시트에 입력된 최신 값까지 포함합니다(위 토글로 진행 중인 달 제외 가능).")
 
     with st.expander("업종별 약정물량(천N㎥) 보기", expanded=cd["detail_rev"] is not None):
@@ -2899,6 +2956,9 @@ def run_tab3_contract():
         if res2:
             res2["cmp"].to_excel(writer, sheet_name="약정vs과거범위", index=False)
             res2["hist"].to_excel(writer, sheet_name="과거월별총량(천m3)", index=False)
+        if res3:
+            res3["cmp"].to_excel(writer, sheet_name="인수량기준_약정vs범위", index=False)
+            res3["hist"].to_excel(writer, sheet_name="인수량기준_과거(천m3)", index=False)
         d2 = cd["detail"].copy()
         d2.columns = [f"{m}월" for m in range(1, 13)]
         d2.index.name = "업종"
