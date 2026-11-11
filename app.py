@@ -2566,6 +2566,8 @@ def parse_contract_excel(file_bytes: bytes):
         label = norm(raw.iat[i, label_col]) if label_col >= 0 else ""
         if not label or label.startswith("*"):
             continue
+        if label.lower().startswith(("av", "min", "max", "gap")):
+            break          # 표 아래 참고 계산 행(av/min/gap)은 업종이 아니므로 중단
         vals = [pd.to_numeric(raw.iat[i, month_col[m]], errors="coerce") for m in range(1, 13)]
         if pd.Series(vals).notna().sum() == 0:
             continue
@@ -3052,26 +3054,16 @@ def run_tab3_contract():
             res3 = _render_contract_version("contract_v3", piv3, "가스공사 인수량 엑셀(㎥÷1,000)", cd, label)
     st.caption("※ 약정은 천N㎥, 과거 실적은 천m³이며 동일 단위로 간주했습니다. 시트에 입력된 최신 값까지 포함합니다(위 토글로 진행 중인 달 제외 가능).")
 
-    with st.expander("업종별 약정물량(천N㎥) 보기", expanded=cd["detail_rev"] is not None):
-        if cd["detail_rev"] is not None:
-            hk = cd["home_key"]
-            st.markdown(f"**수정 반영 업종별 약정물량** — 수정 합계와 원본 합계의 차이는 **{hk or '주택용'}**에서 가감했습니다.")
-            dr = cd["detail_rev"].copy()
-            dr.columns = [f"{m}월" for m in range(1, 13)]
-            dr["소계"] = dr.sum(axis=1)
+    with st.expander("업종별 약정물량(천N㎥) 보기"):
+        base = cd["detail_rev"] if cd["detail_rev"] is not None else cd["detail"]
+        dr = base.copy()
+        dr.columns = [f"{m}월" for m in range(1, 13)]
+        dr["소계"] = dr.sum(axis=1)
+        if cd["revised"] is not None:
             tot_row = pd.DataFrame([cd["revised"].values.tolist() + [float(cd["revised"].sum())]],
-                                   index=["합계(수정)"], columns=dr.columns)
-            st.dataframe(pd.concat([dr, tot_row]).style.format("{:,.0f}"), use_container_width=True)
-            adj = cd["adj"]
-            adj_df = pd.DataFrame([adj.values.tolist() + [float(adj.sum())]], index=[f"{hk or '주택용'} 가감량"],
-                                  columns=dr.columns)
-            st.caption("가감량 = 수정 합계 − 원본 합계 (+는 주택용 증가, −는 감소)")
-            st.dataframe(adj_df.style.format("{:+,.0f}"), use_container_width=True)
-            st.markdown("**원본 업종별 약정물량**")
-        det = cd["detail"].copy()
-        det.columns = [f"{m}월" for m in range(1, 13)]
-        det["소계"] = det.sum(axis=1)
-        st.dataframe(det.style.format("{:,.0f}"), use_container_width=True)
+                                   index=["합계"], columns=dr.columns)
+            dr = pd.concat([dr, tot_row])
+        st.dataframe(dr.style.format("{:,.0f}"), use_container_width=True)
 
     # 엑셀 다운로드: ver1 / ver2 비교표·과거 월별 총량 + 업종별 약정물량
     buf = io.BytesIO()
@@ -3090,7 +3082,6 @@ def run_tab3_contract():
             d3 = cd["detail_rev"].copy()
             d3.columns = [f"{m}월" for m in range(1, 13)]
             d3.loc["합계(수정)"] = cd["revised"].values
-            d3.loc[f"{cd['home_key'] or '주택용'} 가감량"] = cd["adj"].values
             d3.index.name = "업종"
             d3.reset_index().to_excel(writer, sheet_name="수정반영_업종별(천Nm3)", index=False)
     st.download_button("💾 약정물량 분석 데이터 엑셀 저장", buf.getvalue(),
