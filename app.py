@@ -2968,20 +2968,25 @@ def render_kogas5_section(file_bytes):
         st.info("가스공사 5개년 엑셀(1-1. 도시가스 공급계획 총괄표)을 찾지 못했습니다. "
                 "GitHub의 앱 폴더(파일명에 '5개년' 포함)에 올리거나 사이드바에서 업로드해주세요.")
         return
-    cats = [("가정용", "#2563EB"), ("산업용", "#F59E0B"), ("연료전지", "#10B981"), ("기타", "#94A3B8")]
+    cats = [("가정용", "#1B3A6B"), ("산업용", "#2E86AB"), ("연료전지", "#6FB7C9"), ("기타", "#8FA8C4")]   # 진한 남색 → 연한 청회색
     xs = [f"{int(y)}년" for y in df.index]
+    tot = df["합계"]
     fig = go.Figure()
     for name, color in cats:
-        fig.add_trace(go.Bar(x=xs, y=df[name].values, name=name, marker_color=color,
-                             text=[f"{v:,.0f}" for v in df[name].values], textposition="inside",
-                             insidetextanchor="middle", textfont=dict(size=12, color="white"),
-                             hovertemplate="%{y:,.0f} 천m³<extra>" + name + "</extra>"))
-    fig.add_trace(go.Scatter(x=xs, y=df["합계"].values, mode="text", showlegend=False,
-                             text=[f"<b>{v:,.0f}</b>" for v in df["합계"].values], textposition="top center",
-                             textfont=dict(size=14, color="#111827"), hoverinfo="skip"))
-    fig.update_layout(barmode="stack", height=480, plot_bgcolor="white", margin=dict(l=10, r=10, t=40, b=10),
+        share = df[name] / tot * 100
+        txt = [f"{v:,.0f}<br>({p:.1f}%)" if p >= 4 else "" for v, p in zip(df[name].values, share.values)]   # 얇은 칸은 글자 생략
+        fig.add_trace(go.Bar(x=xs, y=df[name].values, name=name, marker_color=color, text=txt,
+                             textposition="inside", insidetextanchor="middle", textfont=dict(size=12, color="white"),
+                             customdata=share.values,
+                             hovertemplate="%{y:,.0f} 천m³ (%{customdata:.1f}%)<extra>" + name + "</extra>"))
+    fig.add_trace(go.Scatter(x=xs, y=tot.values, mode="lines+markers+text", name="합계",
+                             line=dict(color="#F5A800", width=3), marker=dict(size=9, color="#F5A800"),
+                             text=[f"<b>[{v:,.0f} 천m³]</b>" for v in tot.values], textposition="top center",
+                             textfont=dict(size=14, color="#111827"),
+                             hovertemplate="%{y:,.0f} 천m³<extra>합계</extra>"))
+    fig.update_layout(barmode="stack", height=500, plot_bgcolor="white", margin=dict(l=10, r=10, t=40, b=10),
                       yaxis=dict(title=dict(text="연간 물량 (천m³)", font=dict(color="#80868B", size=12)), tickformat=",",
-                                 gridcolor="rgba(148,163,184,0.20)", zeroline=False, range=[0, float(df["합계"].max()) * 1.12]),
+                                 gridcolor="rgba(148,163,184,0.20)", zeroline=False, range=[0, float(tot.max()) * 1.15]),
                       xaxis=dict(showgrid=False),
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displaylogo": False}, key="kogas5_chart")
