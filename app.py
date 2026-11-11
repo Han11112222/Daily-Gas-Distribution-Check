@@ -2640,9 +2640,10 @@ def load_monthly_m3_history():
 
 
 def build_contract_figure(contract: pd.Series, hist: pd.DataFrame, mx: pd.Series, mn: pd.Series, out_mask: pd.Series,
-                          label: str, revised: Optional[pd.Series] = None, rev_out: Optional[pd.Series] = None) -> go.Figure:
+                          label: str, revised: Optional[pd.Series] = None, rev_out: Optional[pd.Series] = None,
+                          x_labels: Optional[list] = None) -> go.Figure:
     n_yr = len(hist)   # 슬라이더로 고른 연도 수
-    months = [f"{m}월" for m in range(1, 13)]
+    months = x_labels or [f"{m}월" for m in range(1, 13)]
     fig = go.Figure()
     # 과거 연도별 꺾은선 (얇은 파스텔)
     pastel = ["#AFC8EE", "#C6BEEB", "#EDB9C6", "#B7D9BE", "#EBD49B", "#B5D3DE", "#D9C3B0", "#C9D6A3", "#E3B7DB", "#B9C4CF"]
@@ -2759,6 +2760,23 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
         contract.index = range(1, 13)
         label = f"{label}(수정)"
 
+    verdict_slot = st.container()                # 판정 문구 자리 (토글 값이 정해진 뒤 채움)
+    _sp, _tg = st.columns([4, 1])
+    with _tg:
+        q_on = st.toggle("분기별 보기", value=False, key=f"{key}_quarter")   # 2개월씩 묶어 6분기
+    if q_on:
+        def _agg(x):
+            if isinstance(x, pd.DataFrame):
+                return pd.DataFrame({k: x[[2 * k - 1, 2 * k]].sum(axis=1, min_count=2) for k in range(1, 7)})
+            return pd.Series({k: x[[2 * k - 1, 2 * k]].sum(min_count=2) for k in range(1, 7)})
+        hist, contract, orig_total = _agg(hist), _agg(contract), _agg(orig_total)
+        x_labels = [f"{k}분기 ({2 * k - 1}~{2 * k}월)" for k in range(1, 7)]
+        unit_word = "분기"
+    else:
+        x_labels = [f"{m}월" for m in range(1, 13)]
+        unit_word = "월"
+    n_per = len(x_labels)
+
     mx, mn, avg = hist.max(), hist.min(), hist.mean()
     over = contract > mx
     under = contract < mn
@@ -2772,25 +2790,27 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
 
     def _verdict(name, o_mask, o_over):
         if o_mask.any():
-            bad = ", ".join(f"{m}월({'초과' if o_over[m] else '미달'})" for m in o_mask.index[o_mask])
-            st.error(f"🚨 {name}: 과거 {len(sel_years)}년 최대·최소 범위를 벗어난 월이 있습니다: {bad}")
+            bad = ", ".join(f"{x_labels[m - 1]}({'초과' if o_over[m] else '미달'})" for m in o_mask.index[o_mask])
+            st.error(f"🚨 {name}: 과거 {len(sel_years)}년 최대·최소 범위를 벗어난 {unit_word}{'이' if not q_on else '가'} 있습니다: {bad}")
         else:
-            st.success(f"✅ {name}: 1~12월이 모두 과거 {len(sel_years)}년 최대·최소 범위 안에 있습니다.")
+            st.success(f"✅ {name}: " + ("1~12월이" if not q_on else "6개 분기가") +
+                       f" 모두 과거 {len(sel_years)}년 최대·최소 범위 안에 있습니다.")
 
-    _verdict(label, out_mask, over)
+    with verdict_slot:
+        _verdict(label, out_mask, over)
 
-    st.plotly_chart(build_contract_figure(contract, hist, mx, mn, out_mask, label, revised, rev_out),
+    st.plotly_chart(build_contract_figure(contract, hist, mx, mn, out_mask, label, revised, rev_out, x_labels),
                     use_container_width=True,
                     config={"scrollZoom": True, "displaylogo": False},   # 마우스 휠로 확대·축소
                     key=f"{key}_chart")
 
     cmp_df = pd.DataFrame({
-        "월": [f"{m}월" for m in range(1, 13)],
+        "월": x_labels,
         f"{label}(천㎥)": contract.values,
         "과거 최소(천㎥)": mn.values, "과거 평균(천㎥)": avg.values, "과거 최대(천㎥)": mx.values,
-        "판정": ["최대 초과" if over[m] else ("최소 미달" if under[m] else "범위 내") for m in range(1, 13)],
+        "판정": ["최대 초과" if over[m] else ("최소 미달" if under[m] else "범위 내") for m in range(1, n_per + 1)],
         "벗어난 양(천㎥)": [(contract[m] - mx[m]) if over[m] else ((contract[m] - mn[m]) if under[m] else 0.0)
-                        for m in range(1, 13)],
+                        for m in range(1, n_per + 1)],
         "평균 대비(%)": ((contract / avg - 1) * 100).values,
     })
     tot = {"월": "합계", f"{label}(천㎥)": contract.sum(), "과거 최소(천㎥)": mn.sum(),
@@ -2827,11 +2847,11 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
     with st.expander("과거 연도별 월별 총량(천m³) 보기"):
         hist_show = hist.copy()
         hist_show.index = [f"{int(y)}년" for y in hist_show.index]
-        hist_show.columns = [f"{m}월" for m in range(1, 13)]
+        hist_show.columns = x_labels
         st.dataframe(hist_show.style.format("{:,.0f}", na_rep="-"), use_container_width=True)
     h2 = hist.copy()
     h2.index.name = "연도"
-    h2.columns = [f"{m}월" for m in range(1, 13)]
+    h2.columns = x_labels
     return dict(cmp=cmp_df, hist=h2.reset_index())
 
 
