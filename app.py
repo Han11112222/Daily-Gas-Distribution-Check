@@ -2730,15 +2730,24 @@ def load_monthly_supply_gj_history():
 
 def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, label: str):
     """한 가지 과거 기준(piv: 연×월, 천m³)에 대해 슬라이더·판정·그래프·표를 그리고, 다운로드용 표를 반환"""
-    full_years = [int(y) for y in piv.index if piv.loc[y].notna().all()]   # 12개월 모두 완결된 연도만
-    if len(full_years) < 2:
-        st.error("12개월이 모두 집계된 과거 연도가 부족합니다.")
+    # 최신 자료까지 모두 사용: 완료된 달(오늘이 속한 달 이전)의 값만 쓰고, 월별로 값이 있는 연도끼리 비교
+    _now = pd.Timestamp.now(tz="Asia/Seoul")
+    incl_cur = st.toggle("진행 중인 달·입력된 미래 달도 포함 (시트에 입력된 값 그대로)", value=True, key=f"{key}_incl_cur")
+    piv = piv.copy()
+    if not incl_cur:
+        for _y in piv.index:
+            for _m in piv.columns:
+                if (int(_y), int(_m)) >= (_now.year, _now.month):
+                    piv.loc[_y, _m] = np.nan
+    full_years = [int(y) for y in piv.index if piv.loc[y].notna().any()]
+    if len(full_years) < 2 or not all(piv.notna().any()):
+        st.error("과거 연도 자료가 부족합니다.")
         return None
     y_max, y_min = max(full_years), min(full_years)
     c1, c2 = st.columns([2, 3])
     with c1:
         yr_range = st.slider("과거 연도 범위", min_value=y_min, max_value=y_max,
-                             value=(max(y_min, y_max - 9), y_max), step=1, key=f"{key}_yr_range")
+                             value=(max(y_min, y_max - 4), y_max), step=1, key=f"{key}_yr_range")   # 기본: 최근 5개 연도
     sel_years = [y for y in full_years if yr_range[0] <= y <= yr_range[1]]
     hist = piv.loc[sel_years]
     contract = cd["total"].copy()
@@ -2818,7 +2827,7 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
         hist_show = hist.copy()
         hist_show.index = [f"{int(y)}년" for y in hist_show.index]
         hist_show.columns = [f"{m}월" for m in range(1, 13)]
-        st.dataframe(hist_show.style.format("{:,.0f}"), use_container_width=True)
+        st.dataframe(hist_show.style.format("{:,.0f}", na_rep="-"), use_container_width=True)
     h2 = hist.copy()
     h2.index.name = "연도"
     h2.columns = [f"{m}월" for m in range(1, 13)]
@@ -2861,7 +2870,7 @@ def run_tab3_contract():
                  "1행(수급량 GJ)·6행(YYYY-MM) 위치가 맞는지 확인해주세요.")
     else:
         res2 = _render_contract_version("contract_v2", piv2, "구글시트 상품별 공급량 재분배 1행 ÷ 42.563", cd, label)
-    st.caption("※ 약정은 천N㎥, 과거 실적은 천m³이며 동일 단위로 간주했습니다. 해당 월·연이 모두 집계된 연도만 포함합니다.")
+    st.caption("※ 약정은 천N㎥, 과거 실적은 천m³이며 동일 단위로 간주했습니다. 시트에 입력된 최신 값까지 포함합니다(위 토글로 진행 중인 달 제외 가능).")
 
     with st.expander("업종별 약정물량(천N㎥) 보기", expanded=cd["detail_rev"] is not None):
         if cd["detail_rev"] is not None:
