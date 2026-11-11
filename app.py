@@ -2641,6 +2641,7 @@ def load_monthly_m3_history():
 
 def build_contract_figure(contract: pd.Series, hist: pd.DataFrame, mx: pd.Series, mn: pd.Series, out_mask: pd.Series,
                           label: str, revised: Optional[pd.Series] = None, rev_out: Optional[pd.Series] = None) -> go.Figure:
+    n_yr = len(hist)   # 슬라이더로 고른 연도 수
     months = [f"{m}월" for m in range(1, 13)]
     fig = go.Figure()
     # 과거 연도별 꺾은선 (얇은 파스텔)
@@ -2650,13 +2651,13 @@ def build_contract_figure(contract: pd.Series, hist: pd.DataFrame, mx: pd.Series
                                  line=dict(color=pastel[i % len(pastel)], width=1.6, shape="spline", smoothing=0.5),
                                  hovertemplate="%{y:,.0f} 천㎥<extra>" + f"{int(y)}년</extra>"))
     # 최대/최소 범위 (음영)
-    fig.add_trace(go.Scatter(x=months, y=mn.values, mode="lines", name="10년 최소",
+    fig.add_trace(go.Scatter(x=months, y=mn.values, mode="lines", name=f"{n_yr}년 최소",
                              line=dict(color="#2563EB", width=2, dash="dash", shape="spline", smoothing=0.5),
-                             hovertemplate="%{y:,.0f} 천㎥<extra>10년 최소</extra>"))
-    fig.add_trace(go.Scatter(x=months, y=mx.values, mode="lines", name="10년 최대",
+                             hovertemplate="%{y:,.0f} 천㎥<extra>" + f"{n_yr}년 최소</extra>"))
+    fig.add_trace(go.Scatter(x=months, y=mx.values, mode="lines", name=f"{n_yr}년 최대",
                              line=dict(color="#D93025", width=2, dash="dash", shape="spline", smoothing=0.5),
                              fill="tonexty", fillcolor="rgba(148,163,184,0.15)",
-                             hovertemplate="%{y:,.0f} 천㎥<extra>10년 최대</extra>"))
+                             hovertemplate="%{y:,.0f} 천㎥<extra>" + f"{n_yr}년 최대</extra>"))
     # 약정물량
     fig.add_trace(go.Scatter(x=months, y=contract.values, mode="lines+markers+text", name=label,
                              line=dict(color="#111827", width=3.6, shape="spline", smoothing=0.5),
