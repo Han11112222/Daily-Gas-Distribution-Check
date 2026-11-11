@@ -2899,7 +2899,7 @@ def parse_intake_excel(file_bytes: bytes, exclude_year: Optional[int] = None):
 @st.cache_data(show_spinner=False)
 def parse_kogas5_excel(file_bytes: bytes):
     """가스공사 5개년 공급계획 엑셀(1-1 총괄표)에서 연도별 용도별 물량(천m³)을 읽는다.
-    반환: DataFrame(index=연도, columns=[가정용, 산업용, 연료전지, 기타, 합계]) 또는 None"""
+    반환: DataFrame(index=연도, columns=[가정용, 산업용, 수송용, 기타, 합계]) 또는 None (기타 = 일반·열병합·연료전지 등)"""
     try:
         xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
     except Exception:
@@ -2949,16 +2949,16 @@ def parse_kogas5_excel(file_bytes: bytes):
                 key = "합계"
             if key and key not in found:
                 found[key] = {y: pd.to_numeric(raw.iat[i, j], errors="coerce") for j, y in ycols.items()}
-        if not {"가정용", "산업용", "연료전지"} <= set(found):
+        if not {"가정용", "산업용", "수송용"} <= set(found):
             continue
         df = pd.DataFrame(found).astype(float)
-        part = df[["가정용", "산업용", "연료전지"]].sum(axis=1)
+        part = df[["가정용", "산업용", "수송용"]].sum(axis=1)
         if "합계" in df:
             df["기타"] = df["합계"] - part
         else:
-            df["기타"] = df[[c for c in ("일반", "열병합", "수송용") if c in df]].sum(axis=1)
+            df["기타"] = df[[c for c in ("일반", "열병합", "연료전지") if c in df]].sum(axis=1)
             df["합계"] = part + df["기타"]
-        return df[["가정용", "산업용", "연료전지", "기타", "합계"]].sort_index()
+        return df[["가정용", "산업용", "수송용", "기타", "합계"]].sort_index()
     return None
 
 
@@ -2970,7 +2970,7 @@ def render_kogas5_section(file_bytes):
         st.info("가스공사 5개년 엑셀(1-1. 도시가스 공급계획 총괄표)을 찾지 못했습니다. "
                 "GitHub의 앱 폴더(파일명에 '5개년' 포함)에 올리거나 사이드바에서 업로드해주세요.")
         return
-    cats = [("가정용", "#1B3A6B"), ("산업용", "#2E86AB"), ("연료전지", "#6FB7C9"), ("기타", "#8FA8C4")]   # 진한 남색 → 연한 청회색
+    cats = [("가정용", "#1B3A6B"), ("산업용", "#2E86AB"), ("수송용", "#6FB7C9"), ("기타", "#8FA8C4")]   # 진한 남색 → 연한 청회색
     xs = [f"{int(y)}년" for y in df.index]
     tot = df["합계"]
     fig = go.Figure()
@@ -2995,7 +2995,7 @@ def render_kogas5_section(file_bytes):
     show = df.T.copy()
     show.columns = xs
     st.dataframe(show.style.format("{:,.0f}", na_rep="-"), use_container_width=True)
-    st.caption("※ 단위: 천m³. 기타 = 합계 − (가정용 + 산업용 + 연료전지) (일반·열병합·수송용 등).")
+    st.caption("※ 단위: 천m³. 기타 = 합계 − (가정용 + 산업용 + 수송용) (일반·업무용, 열병합, 연료전지 등).")
 
 
 def run_tab3_contract():
