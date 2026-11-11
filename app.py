@@ -2661,6 +2661,14 @@ def build_contract_figure(contract: pd.Series, hist: pd.DataFrame, mx: pd.Series
                              line=dict(color="#D93025", width=2, dash="dash", shape="spline", smoothing=0.5),
                              fill="tonexty", fillcolor="rgba(148,163,184,0.15)",
                              hovertemplate="%{y:,.0f} 천㎥<extra>" + f"{n_yr}년 최대</extra>"))
+    # 약정물량 ±10% (초과·미달 시 패널티 기준선)
+    fig.add_trace(go.Scatter(x=months, y=(contract * 0.9).values, mode="lines", name="약정 −10%", showlegend=False, legendgroup="pen",
+                             line=dict(color="#F59E0B", width=2, dash="dot", shape="spline", smoothing=0.5),
+                             hovertemplate="%{y:,.0f} 천㎥<extra>약정 −10%</extra>"))
+    fig.add_trace(go.Scatter(x=months, y=(contract * 1.1).values, mode="lines", name="약정 ±10% (패널티 기준)", legendgroup="pen",
+                             line=dict(color="#F59E0B", width=2, dash="dot", shape="spline", smoothing=0.5),
+                             fill="tonexty", fillcolor="rgba(245,158,11,0.14)",
+                             hovertemplate="%{y:,.0f} 천㎥<extra>약정 +10%</extra>"))
     # 약정물량
     fig.add_trace(go.Scatter(x=months, y=contract.values, mode="lines+markers+text", name=label,
                              line=dict(color="#111827", width=3.6, shape="spline", smoothing=0.5),
@@ -2814,13 +2822,15 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
     cmp_df = pd.DataFrame({
         "월": x_labels,
         f"{label}(천㎥)": contract.values,
+        "약정 −10%(천㎥)": (contract * 0.9).values, "약정 +10%(천㎥)": (contract * 1.1).values,
         "과거 최소(천㎥)": mn.values, "과거 평균(천㎥)": avg.values, "과거 최대(천㎥)": mx.values,
         "판정": ["최대 초과" if over[m] else ("최소 미달" if under[m] else "범위 내") for m in range(1, n_per + 1)],
         "벗어난 양(천㎥)": [(contract[m] - mx[m]) if over[m] else ((contract[m] - mn[m]) if under[m] else 0.0)
                         for m in range(1, n_per + 1)],
         "평균 대비(%)": ((contract / avg - 1) * 100).values,
     })
-    tot = {"월": "합계", f"{label}(천㎥)": contract.sum(), "과거 최소(천㎥)": mn.sum(),
+    tot = {"월": "합계", f"{label}(천㎥)": contract.sum(),
+           "약정 −10%(천㎥)": contract.sum() * 0.9, "약정 +10%(천㎥)": contract.sum() * 1.1, "과거 최소(천㎥)": mn.sum(),
            "과거 평균(천㎥)": avg.sum(), "과거 최대(천㎥)": mx.sum(), "판정": "", "벗어난 양(천㎥)": np.nan,
            "평균 대비(%)": (contract.sum() / avg.sum() - 1) * 100}
     if revised is not None:   # 수정본 열 추가 (원본 옆에)
@@ -3002,10 +3012,16 @@ def render_kogas5_section(file_bytes):
 
     # ── 폭포수(브릿지) 차트: 첫해 → 마지막해 용도별 증감 ──
     y0, y1 = df.index.min(), df.index.max()
+    _wa, _wb = st.columns([4, 1])
+    with _wb:    # 폭포수 우측 상단: 수송용(CNG) 감소분을 빼고 보기
+        ex_cng = st.toggle("CNG감소 제외", value=False, key="kogas5_excng")
     names = ["가정용", "산업용", "수송용", "연료전지", "기타"]
+    if ex_cng:
+        names = [n for n in names if n != "수송용"]
     deltas = [float(df.loc[y1, n] - df.loc[y0, n]) for n in names]
-    start, end = float(df.loc[y0, "합계"]), float(df.loc[y1, "합계"])
-    labels = [f"{int(y0)}년"] + names + [f"{int(y1)}년"]
+    start = float(df.loc[y0, "합계"])
+    end = start + sum(deltas)          # CNG 제외 시: 수송용 감소분만큼 올라간 값
+    labels = [f"{int(y0)}년"] + names + [f"{int(y1)}년" + ("<br>(CNG감소 제외)" if ex_cng else "")]
     run, levels = start, [start]
     for d in deltas:
         run += d
@@ -3043,7 +3059,7 @@ def render_kogas5_section(file_bytes):
                       text=f"<b>[{arrow} {abs(diff):,.0f} {'증가' if diff >= 0 else '감소'}]</b><br>"
                            f"<span style='font-size:12px;color:#6B7280'>{int(y0)}년 대비 {end / start * 100:.1f}%</span>",
                       font=dict(size=15, color=col))
-    wf.update_layout(title=dict(text=f"<b>{int(y0)}년 → {int(y1)}년 용도별 증감 브릿지</b>", x=0.01, font=dict(size=16)),
+    wf.update_layout(title=dict(text=f"<b>{int(y0)}년 → {int(y1)}년 용도별 증감 브릿지" + (" (CNG감소 제외)" if ex_cng else "") + "</b>", x=0.01, font=dict(size=16)),
                      height=460, plot_bgcolor="white", margin=dict(l=10, r=10, t=60, b=10), bargap=0.3,
                      yaxis=dict(range=[y_lo, y_hi], tickformat=",", gridcolor="rgba(148,163,184,0.20)", zeroline=False,
                                 tickfont=dict(color="#80868B", size=11)),
