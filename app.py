@@ -2764,6 +2764,11 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
 
     verdict_slot = st.container()                # 판정 문구 자리 (토글 값이 정해진 뒤 채움)
     _sp, _tg = st.columns([4, 1])
+    with _sp:     # 그래프 좌측 상단: 기온분석 앱 바로가기
+        st.markdown(
+            "<a href='https://temperature-analysis-choihanyoub.streamlit.app/' target='_blank' rel='noopener' "
+            "style='display:inline-block;padding:6px 14px;border:1px solid #2563EB;border-radius:8px;color:#2563EB;"
+            "font-size:14px;font-weight:600;text-decoration:none;'>🌡️ 기온분석 바로가기</a>", unsafe_allow_html=True)
     with _tg:
         q_on = st.toggle("분기별 보기", value=False, key=f"{key}_quarter")   # 2개월씩 묶어 6분기
     if q_on:
