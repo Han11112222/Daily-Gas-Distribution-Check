@@ -2899,7 +2899,7 @@ def parse_intake_excel(file_bytes: bytes, exclude_year: Optional[int] = None):
 @st.cache_data(show_spinner=False)
 def parse_kogas5_excel(file_bytes: bytes):
     """가스공사 5개년 공급계획 엑셀(1-1 총괄표)에서 연도별 용도별 물량(천m³)을 읽는다.
-    반환: DataFrame(index=연도, columns=[가정용, 산업용, 수송용, 기타, 합계]) 또는 None (기타 = 일반·열병합·연료전지 등)"""
+    반환: DataFrame(index=연도, columns=[가정용, 산업용, 수송용, 연료전지, 기타, 합계]) 또는 None (기타 = 일반·업무용·열병합 등)"""
     try:
         xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
     except Exception:
@@ -2952,13 +2952,15 @@ def parse_kogas5_excel(file_bytes: bytes):
         if not {"가정용", "산업용", "수송용"} <= set(found):
             continue
         df = pd.DataFrame(found).astype(float)
-        part = df[["가정용", "산업용", "수송용"]].sum(axis=1)
+        if "연료전지" not in df:
+            df["연료전지"] = 0.0
+        part = df[["가정용", "산업용", "수송용", "연료전지"]].sum(axis=1)
         if "합계" in df:
             df["기타"] = df["합계"] - part
         else:
-            df["기타"] = df[[c for c in ("일반", "열병합", "연료전지") if c in df]].sum(axis=1)
+            df["기타"] = df[[c for c in ("일반", "열병합") if c in df]].sum(axis=1)
             df["합계"] = part + df["기타"]
-        return df[["가정용", "산업용", "수송용", "기타", "합계"]].sort_index()
+        return df[["가정용", "산업용", "수송용", "연료전지", "기타", "합계"]].sort_index()
     return None
 
 
@@ -2970,7 +2972,7 @@ def render_kogas5_section(file_bytes):
         st.info("가스공사 5개년 엑셀(1-1. 도시가스 공급계획 총괄표)을 찾지 못했습니다. "
                 "GitHub의 앱 폴더(파일명에 '5개년' 포함)에 올리거나 사이드바에서 업로드해주세요.")
         return
-    cats = [("가정용", "#1B3A6B"), ("산업용", "#2E86AB"), ("수송용", "#6FB7C9"), ("기타", "#8FA8C4")]   # 진한 남색 → 연한 청회색
+    cats = [("가정용", "#1B3A6B"), ("산업용", "#2E86AB"), ("수송용", "#6FB7C9"), ("연료전지", "#10B981"), ("기타", "#8FA8C4")]   # 진한 남색 → 연한 청회색
     xs = [f"{int(y)}년" for y in df.index]
     tot = df["합계"]
     fig = go.Figure()
@@ -2996,22 +2998,27 @@ def render_kogas5_section(file_bytes):
     show.columns = xs
     first_y, last_y = df.index.min(), df.index.max()
     chg = show[xs[-1]] - show[xs[0]]
+    pct = chg / show[xs[0]] * 100
     G = "background:#F0F2F6;font-weight:700;"
-    th = "padding:10px 8px;border-bottom:2px solid #ddd;text-align:right;" + G
-    td = "padding:9px 8px;border-bottom:1px solid #eee;text-align:right;"
-    head = (f"<th style='{th}text-align:left;'>구분</th>" + "".join(f"<th style='{th}'>{c}</th>" for c in xs) +
-            f"<th style='{th}'>{int(last_y)}년 vs {int(first_y)}년 증감</th>")
+    th = "padding:10px 6px;border-bottom:2px solid #ddd;text-align:center;" + G
+    td = "padding:9px 6px;border-bottom:1px solid #eee;text-align:center;"
+    ncol = len(xs) + 2
+    cw = f"<col style='width:{100 / ncol:.4f}%'>" * ncol            # 모든 칸 너비 동일
+    head = (f"<th style='{th}'>구분</th>" + "".join(f"<th style='{th}'>{c}</th>" for c in xs) +
+            f"<th style='{th}'>{int(last_y)}년 vs {int(first_y)}년 증감 (증감률)</th>")
     body = ""
     for name, row in show.iterrows():
         bg = G if name == "합계" else ""
-        c = chg[name]
+        c, p = chg[name], pct[name]
         col = "#D93025" if c < 0 else "#2563EB"
-        body += (f"<tr style='{bg}'><td style='{td}text-align:left;font-weight:600;'>{name}</td>" +
+        body += (f"<tr style='{bg}'><td style='{td}font-weight:600;'>{name}</td>" +
                  "".join(f"<td style='{td}'>{v:,.0f}</td>" for v in row.values) +
-                 f"<td style='{td}color:{col};font-weight:700;'>{c:+,.0f}</td></tr>")
-    st.markdown(f"<table style='width:100%;border-collapse:collapse;font-size:14px;'><thead><tr>{head}</tr></thead>"
-                f"<tbody>{body}</tbody></table>", unsafe_allow_html=True)
-    st.caption("※ 단위: 천m³. 기타 = 합계 − (가정용 + 산업용 + 수송용) (일반·업무용, 열병합, 연료전지 등).")
+                 f"<td style='{td}color:{col};font-weight:700;'>{c:+,.0f} ({p:+.1f}%)</td></tr>")
+    st.markdown("<div style='text-align:right;font-size:13px;color:#666;margin-bottom:4px;'>(단위: 천m³)</div>"
+                f"<table style='width:100%;border-collapse:collapse;table-layout:fixed;font-size:14px;'>"
+                f"<colgroup>{cw}</colgroup><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>",
+                unsafe_allow_html=True)
+    st.caption("※ 단위: 천m³. 기타 = 합계 − (가정용 + 산업용 + 수송용 + 연료전지) (일반·업무용, 열병합 등).")
 
 
 def run_tab3_contract():
