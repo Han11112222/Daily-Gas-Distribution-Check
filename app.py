@@ -2894,6 +2894,103 @@ def parse_intake_excel(file_bytes: bytes, exclude_year: Optional[int] = None):
     return piv.dropna(how="all")
 
 
+@st.cache_data(show_spinner=False)
+def parse_kogas5_excel(file_bytes: bytes):
+    """가스공사 5개년 공급계획 엑셀(1-1 총괄표)에서 연도별 용도별 물량(천m³)을 읽는다.
+    반환: DataFrame(index=연도, columns=[가정용, 산업용, 연료전지, 기타, 합계]) 또는 None"""
+    try:
+        xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
+    except Exception:
+        return None
+
+    def norm(v):
+        return "" if pd.isna(v) else re.sub(r"\s+", "", str(v))
+
+    for sn in xls.sheet_names:
+        try:
+            raw = xls.parse(sn, header=None)
+        except Exception:
+            continue
+        # 연도 헤더 행: 2000년대 연도(4자리)가 3개 이상 있는 첫 행
+        hdr, ycols = None, {}
+        for i in range(min(len(raw), 30)):
+            cols = {}
+            for j, v in enumerate(raw.iloc[i].values):
+                yv = pd.to_numeric(norm(v).replace("년", ""), errors="coerce")
+                if pd.notna(yv) and float(yv).is_integer() and 2000 <= yv <= 2100:
+                    cols[j] = int(yv)
+            if len(cols) >= 3:
+                hdr, ycols = i, cols
+                break
+        if hdr is None:
+            continue
+        found = {}
+        for i in range(hdr + 1, min(len(raw), hdr + 40)):
+            labs = [norm(raw.iat[i, c]) for c in range(0, min(ycols))]   # 연도 열 왼쪽의 구분 칸만
+            lab = next((l for l in labs[::-1] if l), "")     # 오른쪽(구분2) 칸 우선
+            if not lab:
+                continue
+            key = None
+            if lab.startswith("가정용물량"):
+                key = "가정용"
+            elif lab.startswith("산업용"):
+                key = "산업용"
+            elif lab.startswith("연료전지"):
+                key = "연료전지"
+            elif lab.startswith("일반"):
+                key = "일반"
+            elif lab.startswith("열병합"):
+                key = "열병합"
+            elif lab.startswith("수송용"):
+                key = "수송용"
+            elif lab.startswith("합계물량") or lab == "합계":
+                key = "합계"
+            if key and key not in found:
+                found[key] = {y: pd.to_numeric(raw.iat[i, j], errors="coerce") for j, y in ycols.items()}
+        if not {"가정용", "산업용", "연료전지"} <= set(found):
+            continue
+        df = pd.DataFrame(found).astype(float)
+        part = df[["가정용", "산업용", "연료전지"]].sum(axis=1)
+        if "합계" in df:
+            df["기타"] = df["합계"] - part
+        else:
+            df["기타"] = df[[c for c in ("일반", "열병합", "수송용") if c in df]].sum(axis=1)
+            df["합계"] = part + df["기타"]
+        return df[["가정용", "산업용", "연료전지", "기타", "합계"]].sort_index()
+    return None
+
+
+def render_kogas5_section(file_bytes):
+    st.markdown("---")
+    st.header("가스공사 5개년")
+    df = parse_kogas5_excel(file_bytes) if file_bytes else None
+    if df is None or df.empty:
+        st.info("가스공사 5개년 엑셀(1-1. 도시가스 공급계획 총괄표)을 찾지 못했습니다. "
+                "GitHub의 앱 폴더(파일명에 '5개년' 포함)에 올리거나 사이드바에서 업로드해주세요.")
+        return
+    cats = [("가정용", "#2563EB"), ("산업용", "#F59E0B"), ("연료전지", "#10B981"), ("기타", "#94A3B8")]
+    xs = [f"{int(y)}년" for y in df.index]
+    fig = go.Figure()
+    for name, color in cats:
+        fig.add_trace(go.Bar(x=xs, y=df[name].values, name=name, marker_color=color,
+                             text=[f"{v:,.0f}" for v in df[name].values], textposition="inside",
+                             insidetextanchor="middle", textfont=dict(size=12, color="white"),
+                             hovertemplate="%{y:,.0f} 천m³<extra>" + name + "</extra>"))
+    fig.add_trace(go.Scatter(x=xs, y=df["합계"].values, mode="text", showlegend=False,
+                             text=[f"<b>{v:,.0f}</b>" for v in df["합계"].values], textposition="top center",
+                             textfont=dict(size=14, color="#111827"), hoverinfo="skip"))
+    fig.update_layout(barmode="stack", height=480, plot_bgcolor="white", margin=dict(l=10, r=10, t=40, b=10),
+                      yaxis=dict(title=dict(text="연간 물량 (천m³)", font=dict(color="#80868B", size=12)), tickformat=",",
+                                 gridcolor="rgba(148,163,184,0.20)", zeroline=False, range=[0, float(df["합계"].max()) * 1.12]),
+                      xaxis=dict(showgrid=False),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displaylogo": False}, key="kogas5_chart")
+    show = df.T.copy()
+    show.columns = xs
+    st.dataframe(show.style.format("{:,.0f}", na_rep="-"), use_container_width=True)
+    st.caption("※ 단위: 천m³. 기타 = 합계 − (가정용 + 산업용 + 연료전지) (일반·열병합·수송용 등).")
+
+
 def run_tab3_contract():
     if not _contract_pw_gate():
         return
@@ -2901,6 +2998,7 @@ def run_tab3_contract():
     st.sidebar.header("📂 [약정물량] 데이터 파일")
     up = st.sidebar.file_uploader("약정물량 엑셀 업로드", type=["xlsx"], key="u3")
     up_in = st.sidebar.file_uploader("인수량 엑셀 업로드 (선택)", type=["xlsx"], key="u3_intake")
+    up_k5 = st.sidebar.file_uploader("가스공사 5개년 엑셀 업로드 (선택)", type=["xlsx"], key="u3_k5")
     file_bytes = None
     if up is not None:
         file_bytes = up.getvalue()
@@ -2993,6 +3091,14 @@ def run_tab3_contract():
     st.download_button("💾 약정물량 분석 데이터 엑셀 저장", buf.getvalue(),
                        f"약정물량_분석_{cd['year'] or ''}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # ── 가장 하단: 가스공사 5개년 (2026~2031 용도별 스택 그래프) ──
+    k5_bytes = up_k5.getvalue() if up_k5 is not None else None
+    if k5_bytes is None:
+        k5c = sorted(Path(__file__).parent.glob("*5개년*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if k5c:
+            k5_bytes = k5c[0].read_bytes()
+    render_kogas5_section(k5_bytes)
 
 
 # ==============================================================================
