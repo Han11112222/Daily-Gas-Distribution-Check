@@ -2994,7 +2994,23 @@ def render_kogas5_section(file_bytes):
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displaylogo": False}, key="kogas5_chart")
     show = df.T.copy()
     show.columns = xs
-    st.dataframe(show.style.format("{:,.0f}", na_rep="-"), use_container_width=True)
+    first_y, last_y = df.index.min(), df.index.max()
+    chg = show[xs[-1]] - show[xs[0]]
+    G = "background:#F0F2F6;font-weight:700;"
+    th = "padding:10px 8px;border-bottom:2px solid #ddd;text-align:right;" + G
+    td = "padding:9px 8px;border-bottom:1px solid #eee;text-align:right;"
+    head = (f"<th style='{th}text-align:left;'>구분</th>" + "".join(f"<th style='{th}'>{c}</th>" for c in xs) +
+            f"<th style='{th}'>{int(last_y)}년 vs {int(first_y)}년 증감</th>")
+    body = ""
+    for name, row in show.iterrows():
+        bg = G if name == "합계" else ""
+        c = chg[name]
+        col = "#D93025" if c < 0 else "#2563EB"
+        body += (f"<tr style='{bg}'><td style='{td}text-align:left;font-weight:600;'>{name}</td>" +
+                 "".join(f"<td style='{td}'>{v:,.0f}</td>" for v in row.values) +
+                 f"<td style='{td}color:{col};font-weight:700;'>{c:+,.0f}</td></tr>")
+    st.markdown(f"<table style='width:100%;border-collapse:collapse;font-size:14px;'><thead><tr>{head}</tr></thead>"
+                f"<tbody>{body}</tbody></table>", unsafe_allow_html=True)
     st.caption("※ 단위: 천m³. 기타 = 합계 − (가정용 + 산업용 + 수송용) (일반·업무용, 열병합, 연료전지 등).")
 
 
