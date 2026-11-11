@@ -2994,6 +2994,58 @@ def render_kogas5_section(file_bytes):
                       xaxis=dict(showgrid=False),
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displaylogo": False}, key="kogas5_chart")
+
+    # ── 폭포수(브릿지) 차트: 첫해 → 마지막해 용도별 증감 ──
+    y0, y1 = df.index.min(), df.index.max()
+    names = ["가정용", "산업용", "수송용", "연료전지", "기타"]
+    deltas = [float(df.loc[y1, n] - df.loc[y0, n]) for n in names]
+    start, end = float(df.loc[y0, "합계"]), float(df.loc[y1, "합계"])
+    labels = [f"{int(y0)}년"] + names + [f"{int(y1)}년"]
+    run, levels = start, [start]
+    for d in deltas:
+        run += d
+        levels.append(run)                         # 각 증감 직후 누적 수준
+    tops = [start] + [max(levels[i], levels[i + 1]) for i in range(len(names))] + [end]
+    lo_v = min(levels + [end]); hi_v = max(levels + [start])
+    pad = (hi_v - lo_v) * 0.35
+    y_lo = np.floor((lo_v - pad) / 10000) * 10000
+    y_hi = np.ceil((hi_v + pad * 1.6) / 10000) * 10000
+    UP, DOWN, ENDC = "#2F6DB5", "#9CC3E6", "#1F3A5F"
+    wf = go.Figure()
+    wf.add_trace(go.Bar(x=[labels[0], labels[-1]], y=[start, end], marker_color=ENDC, width=0.55, showlegend=False,
+                        hovertemplate="%{y:,.0f} 천m³<extra></extra>"))
+    for i, (n, d) in enumerate(zip(names, deltas)):
+        wf.add_trace(go.Bar(x=[n], y=[abs(d)], base=[min(levels[i], levels[i + 1])], width=0.55, showlegend=False,
+                            marker_color=UP if d >= 0 else DOWN,
+                            hovertemplate=f"{d:+,.0f} 천m³<extra>{n}</extra>"))
+    # 값 라벨 (증가는 막대 위, 감소는 막대 아래, 양끝은 위)
+    wf.add_trace(go.Scatter(x=[labels[0], labels[-1]], y=[start, end], mode="text", showlegend=False, hoverinfo="skip",
+                            text=[f"<b>{start:,.0f}</b>", f"<b>{end:,.0f}</b>"], textposition="top center", textfont=dict(size=13)))
+    for i, (n, d) in enumerate(zip(names, deltas)):
+        wf.add_trace(go.Scatter(x=[n], y=[tops[i + 1] if d >= 0 else min(levels[i], levels[i + 1])], mode="text",
+                                showlegend=False, hoverinfo="skip", text=[f"{d:+,.0f}"],
+                                textposition="top center" if d >= 0 else "bottom center", textfont=dict(size=12)))
+    # 점선 연결선
+    for i in range(len(labels) - 1):
+        lvl = levels[i] if i < len(levels) else end
+        if i == len(labels) - 2:
+            lvl = levels[-1]
+        wf.add_shape(type="line", x0=i + 0.275, x1=i + 1 - 0.275, y0=lvl, y1=lvl, xref="x", yref="y",
+                     line=dict(color="#B0B7C3", width=1, dash="dot"))
+    diff = end - start
+    arrow, col = ("▲", "#2F6DB5") if diff >= 0 else ("▼", "#D93025")
+    wf.add_annotation(x=labels[-1], y=end + (y_hi - y_lo) * 0.13, xref="x", yref="y", showarrow=False,
+                      text=f"<b>[{arrow} {abs(diff):,.0f} {'증가' if diff >= 0 else '감소'}]</b><br>"
+                           f"<span style='font-size:12px;color:#6B7280'>{int(y0)}년 대비 {end / start * 100:.1f}%</span>",
+                      font=dict(size=15, color=col))
+    wf.update_layout(title=dict(text=f"<b>{int(y0)}년 → {int(y1)}년 용도별 증감 브릿지</b>", x=0.01, font=dict(size=16)),
+                     height=460, plot_bgcolor="white", margin=dict(l=10, r=10, t=60, b=10), bargap=0.3,
+                     yaxis=dict(range=[y_lo, y_hi], tickformat=",", gridcolor="rgba(148,163,184,0.20)", zeroline=False,
+                                tickfont=dict(color="#80868B", size=11)),
+                     xaxis=dict(showgrid=False, tickfont=dict(color="#6B7280", size=12), categoryorder="array", categoryarray=labels))
+    wf.add_annotation(xref="paper", yref="paper", x=1, y=1.12, showarrow=False, text="단위: 천m³",
+                      font=dict(size=12, color="#6B7280"))
+    st.plotly_chart(wf, use_container_width=True, config={"scrollZoom": True, "displaylogo": False}, key="kogas5_wf")
     show = df.T.copy()
     show.columns = xs
     first_y, last_y = df.index.min(), df.index.max()
