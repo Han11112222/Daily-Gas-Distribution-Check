@@ -2585,6 +2585,16 @@ def parse_contract_excel(file_bytes: bytes):
         revised = pd.Series(revised_vals, index=range(1, 13), dtype=float)
         revised = revised.fillna(pd.Series(total.values, index=range(1, 13), dtype=float))   # 빈 칸은 원본 값 사용
 
+    # 수정본 합계와 원본 합계의 차이는 '주택용'에서 가감 → 수정 반영 업종표
+    detail_rev, adj, home_key = None, None, None
+    if revised is not None:
+        adj = (revised - total.astype(float)).round(6)
+        home_key = next((k for k in detail_only.index if k == "주택용"), None) or \
+                   next((k for k in detail_only.index if "주택" in k), None)
+        detail_rev = detail_only.copy().astype(float)
+        if home_key is not None:
+            detail_rev.loc[home_key] = detail_rev.loc[home_key] + adj
+
     year, company = None, ""
     for i in range(min(hdr, 8)):
         for v in raw.iloc[i].values:
@@ -2594,7 +2604,8 @@ def parse_contract_excel(file_bytes: bytes):
                 year = int(m.group(1))
             if "회사명" in t:
                 company = t.split(":")[-1].strip()
-    return dict(total=total.astype(float), detail=detail_only, year=year, company=company, sheet=sheet, revised=revised)
+    return dict(total=total.astype(float), detail=detail_only, year=year, company=company, sheet=sheet, revised=revised,
+                detail_rev=detail_rev, adj=adj, home_key=home_key)
 
 
 @st.cache_data(show_spinner=False, ttl=600)
@@ -2731,19 +2742,18 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
     hist = piv.loc[sel_years]
     contract = cd["total"].copy()
     contract.index = range(1, 13)
+    orig_total = contract.copy()                 # 원본 합계(참고용)
+    revised = cd.get("revised")
+    if revised is not None:                      # '수정' 행이 있으면 수정본이 곧 약정물량
+        contract = revised.copy()
+        contract.index = range(1, 13)
+        label = f"{label}(수정)"
 
     mx, mn, avg = hist.max(), hist.min(), hist.mean()
     over = contract > mx
     under = contract < mn
     out_mask = over | under
-
-    revised = cd.get("revised")
-    rev_over = rev_under = rev_out = None
-    if revised is not None:
-        revised = revised.copy()
-        revised.index = range(1, 13)
-        rev_over, rev_under = revised > mx, revised < mn
-        rev_out = rev_over | rev_under
+    revised = rev_over = rev_under = rev_out = None   # 이후 로직은 단일 선(수정본)만 사용
 
     with c2:
         st.markdown(f"<div style='padding-top:28px;font-size:14px;color:#666;'>"
@@ -2757,9 +2767,7 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
         else:
             st.success(f"✅ {name}: 1~12월이 모두 과거 {len(sel_years)}년 최대·최소 범위 안에 있습니다.")
 
-    _verdict("원본", out_mask, over)
-    if revised is not None:
-        _verdict("수정본", rev_out, rev_over)
+    _verdict(label, out_mask, over)
 
     st.plotly_chart(build_contract_figure(contract, hist, mx, mn, out_mask, label, revised, rev_out),
                     use_container_width=True,
@@ -2784,10 +2792,15 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
                       ["최대 초과" if rev_over[m] else ("최소 미달" if rev_under[m] else "범위 내") for m in range(1, 13)])
         cmp_df.insert(pos + 2, "수정-원본(천㎥)", (revised - contract).values)
         tot.update({"수정본(천㎥)": revised.sum(), "수정본 판정": "", "수정-원본(천㎥)": (revised - contract).sum()})
+    if cd.get("revised") is not None:   # 참고: 원본 합계와 수정 차이
+        pos = list(cmp_df.columns).index("벗어난 양(천㎥)") + 1
+        cmp_df.insert(pos, "원본 합계(천㎥)", orig_total.values)
+        cmp_df.insert(pos + 1, "수정-원본(천㎥)", (contract - orig_total).values)
+        tot.update({"원본 합계(천㎥)": orig_total.sum(), "수정-원본(천㎥)": (contract - orig_total).sum()})
     show_df = pd.concat([cmp_df, pd.DataFrame([tot])], ignore_index=True)
 
     def _hl(row):
-        if row["판정"] in ("최대 초과", "최소 미달") or row.get("수정본 판정") in ("최대 초과", "최소 미달"):
+        if row["판정"] in ("최대 초과", "최소 미달"):
             return ["background-color: #FFD6D6; font-weight: bold"] * len(row)
         if row["월"] == "합계":
             return ["background-color: #F0F2F6; font-weight: bold"] * len(row)
@@ -2822,7 +2835,8 @@ def run_tab3_contract():
         file_bytes = up.getvalue()
         st.sidebar.success("✅ 약정물량 파일 로드 성공")
     else:   # 업로드가 없으면 앱 폴더의 '약정' 엑셀을 찾아 사용
-        cands = sorted(Path(__file__).parent.glob("*약정*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
+        cands = sorted(Path(__file__).parent.glob("*약정*.xlsx"),
+                       key=lambda p: ("ver2" in p.name.lower(), p.stat().st_mtime), reverse=True)
         if cands:
             file_bytes = cands[0].read_bytes()
             st.sidebar.info(f"ℹ️ 기본 약정물량 파일 사용 ({cands[0].name})")
@@ -2848,7 +2862,22 @@ def run_tab3_contract():
         res2 = _render_contract_version("contract_v2", piv2, "구글시트 상품별 공급량 재분배 1행 ÷ 42.563", cd, label)
     st.caption("※ 약정은 천N㎥, 과거 실적은 천m³이며 동일 단위로 간주했습니다. 해당 월·연이 모두 집계된 연도만 포함합니다.")
 
-    with st.expander("업종별 약정물량(천N㎥) 보기"):
+    with st.expander("업종별 약정물량(천N㎥) 보기", expanded=cd["detail_rev"] is not None):
+        if cd["detail_rev"] is not None:
+            hk = cd["home_key"]
+            st.markdown(f"**수정 반영 업종별 약정물량** — 수정 합계와 원본 합계의 차이는 **{hk or '주택용'}**에서 가감했습니다.")
+            dr = cd["detail_rev"].copy()
+            dr.columns = [f"{m}월" for m in range(1, 13)]
+            dr["소계"] = dr.sum(axis=1)
+            tot_row = pd.DataFrame([cd["revised"].values.tolist() + [float(cd["revised"].sum())]],
+                                   index=["합계(수정)"], columns=dr.columns)
+            st.dataframe(pd.concat([dr, tot_row]).style.format("{:,.0f}"), use_container_width=True)
+            adj = cd["adj"]
+            adj_df = pd.DataFrame([adj.values.tolist() + [float(adj.sum())]], index=[f"{hk or '주택용'} 가감량"],
+                                  columns=dr.columns)
+            st.caption("가감량 = 수정 합계 − 원본 합계 (+는 주택용 증가, −는 감소)")
+            st.dataframe(adj_df.style.format("{:+,.0f}"), use_container_width=True)
+            st.markdown("**원본 업종별 약정물량**")
         det = cd["detail"].copy()
         det.columns = [f"{m}월" for m in range(1, 13)]
         det["소계"] = det.sum(axis=1)
@@ -2864,6 +2893,13 @@ def run_tab3_contract():
         d2.columns = [f"{m}월" for m in range(1, 13)]
         d2.index.name = "업종"
         d2.reset_index().to_excel(writer, sheet_name="업종별약정물량(천Nm3)", index=False)
+        if cd["detail_rev"] is not None:
+            d3 = cd["detail_rev"].copy()
+            d3.columns = [f"{m}월" for m in range(1, 13)]
+            d3.loc["합계(수정)"] = cd["revised"].values
+            d3.loc[f"{cd['home_key'] or '주택용'} 가감량"] = cd["adj"].values
+            d3.index.name = "업종"
+            d3.reset_index().to_excel(writer, sheet_name="수정반영_업종별(천Nm3)", index=False)
     st.download_button("💾 약정물량 분석 데이터 엑셀 저장", buf.getvalue(),
                        f"약정물량_분석_{cd['year'] or ''}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
