@@ -3199,6 +3199,32 @@ def run_tab3_contract():
 st.sidebar.title("통합 메뉴")
 menu = st.sidebar.radio("이동", ["1. 도시가스 공급실적 관리", "2. 공급량 분석", "3. 약정물량"])
 
+
+def render_large_view_control():
+    """[최상단] '크게 보기' 토글 — 켜면 본문 전체(글자·카드·표·그래프)를 배율만큼 확대.
+    CSS zoom 방식이라 코드 안의 px 고정 글자(카드·HTML 표)와 그래프까지 한 번에 커진다."""
+    _sp, _c_tg, _c_lv = st.columns([5, 1.4, 2.2])
+    with _c_tg:
+        big = st.toggle("🔍 크게 보기", value=False, key="large_view",
+                        help="본문 글씨와 표·그래프를 함께 확대합니다. 끄면 원래 크기로 돌아옵니다.")
+    if not big:
+        return
+    with _c_lv:
+        pct = st.select_slider("확대 배율", options=[115, 130, 150, 175], value=130,
+                               format_func=lambda v: f"{v}%", key="large_view_pct",
+                               label_visibility="collapsed")
+    st.markdown(
+        f"""<style>
+        section.main .block-container,
+        [data-testid="stMain"] .block-container,
+        [data-testid="stAppViewBlockContainer"] {{ zoom: {pct / 100:.2f}; }}
+        </style>""",
+        unsafe_allow_html=True,
+    )
+
+
+render_large_view_control()
+
 if menu == "1. 도시가스 공급실적 관리":
     run_tab1_management()
 elif menu == "2. 공급량 분석":
