@@ -1163,10 +1163,11 @@ def build_hourly_continuous_figure(obs_m: pd.DataFrame, days: list, sheet_avg: d
     return fig
 
 
-def hourly_temperature_section(key_prefix: str = "hourly_"):
+def hourly_temperature_section(key_prefix: str = "hourly_", sel_year: Optional[int] = None, sel_month: Optional[int] = None):
     """[탭2 최하단] '시간대별 기온 분석' 활성화 버튼
+    - sel_year/sel_month(탭2 맨 위 '기준 연도·월')를 주면 그 달 안에서 24시간이 모두 들어온 마지막 날을 '최신일'로 사용
     - 기본: 최신일 + D-1 시간대별 기온 겹쳐보기 (그래프 상단 D-n 버튼으로 D-6까지 확장)
-    - 우측 '이어보기': 같은 자리에서 당월 1일 ~ 현재까지 가로로 이어진 그래프로 전환"""
+    - 우측 '이어보기': 같은 자리에서 해당 월 1일 ~ 월말(또는 현재까지) 가로로 이어진 그래프로 전환"""
     show = st.toggle("🌡️ 시간대별 기온 분석", value=False, key=f"{key_prefix}toggle")
     if not show:
         return
@@ -1177,11 +1178,19 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
                 "시트 공유 설정과 열 이름('0:00', '1:00' …)을 확인해 주세요.")
         return
 
+    # 분석 대상 월: 기준 연·월이 주어지면 그 달 자료만으로 '최신일'을 정한다
+    scope = obs
+    if sel_year is not None and sel_month is not None:
+        scope = obs[(obs["일자"].dt.year == int(sel_year)) & (obs["일자"].dt.month == int(sel_month))]
+        if scope.empty:
+            st.info(f"{int(sel_year)}년 {int(sel_month)}월 시간대별 기온 자료가 구글시트에 없습니다.")
+            return
+
     # '최신일' = 24시간이 모두 들어온 마지막 날 (아직 진행 중인 날은 제외 → 전날과 공정하게 비교)
-    cnt = obs.groupby("일자")["시"].nunique()
+    cnt = scope.groupby("일자")["시"].nunique()
     full_days = cnt[cnt >= 24].index
-    last_day = pd.Timestamp(full_days.max() if len(full_days) else obs["일자"].max())
-    partial_day = pd.Timestamp(obs["일자"].max()) if pd.Timestamp(obs["일자"].max()) > last_day else None
+    last_day = pd.Timestamp(full_days.max() if len(full_days) else scope["일자"].max())
+    partial_day = pd.Timestamp(scope["일자"].max()) if pd.Timestamp(scope["일자"].max()) > last_day else None
     avail = set(pd.to_datetime(obs["일자"].unique()))
     opts = [f"D-{k}" for k in range(1, 7) if (last_day - pd.Timedelta(days=k)) in avail]
     if not opts:
@@ -1189,13 +1198,15 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
         return
 
     # 제목 → 안내 문구 → [D-n 버튼 (좌) | 이어보기 (우)] → 그래프
-    st.markdown(f"### 🌡️ 시간대별 기온 분석 · 최신 {last_day:%m/%d}")
+    st.markdown(f"### 🌡️ 시간대별 기온 분석 · {last_day.month}월 최신 {last_day:%m/%d}")
     cap_slot = st.empty()          # 안내 문구 자리 (아래 버튼 선택값이 정해진 뒤 채움)
 
     try:    # 버튼들을 같은 높이로 맞춤 (구버전 streamlit은 옵션이 없어 기본 정렬)
         b_left, b_right, b_sup = st.columns([3.3, 1.2, 1.9], vertical_alignment="center")
     except TypeError:
         b_left, b_right, b_sup = st.columns([3.3, 1.2, 1.9])
+    if st.session_state.get(f"{key_prefix}dn") not in (None, *opts):   # 월이 바뀌어 선택했던 D-n이 없어졌으면 초기화
+        st.session_state.pop(f"{key_prefix}dn", None)
     with b_left:   # 최신일 기준 D-n 버튼 (D-3 = 최신일 + 3일 전까지 = 4일)
         if hasattr(st, "segmented_control"):
             pick = st.segmented_control("비교 기간", opts, default=opts[0], key=f"{key_prefix}dn",
@@ -1252,7 +1263,8 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
 
     if cont:
         month_start = last_day.replace(day=1)
-        obs_m = obs[obs["dt"] >= month_start].copy()
+        month_end = month_start + pd.offsets.MonthBegin(1)            # 다음 달 1일 00:00 (= 월말 24시)
+        obs_m = obs[(obs["dt"] >= month_start) & (obs["dt"] <= month_end)].copy()
         plotly_show(build_hourly_continuous_figure(obs_m, days, sheet_avg, supply), use_container_width=True)
         st.caption(f"{obs_m['dt'].min():%m/%d %H:%M} ~ {obs_m['dt'].max():%m/%d %H:%M} · "
                    f"색 음영=선택한 {len(days)}일(진한 부분=날짜별 최저기온 지속 구간) · 주황 점선=일평균기온(구글시트)")
@@ -2505,7 +2517,7 @@ def run_tab2_analysis():
         temperature_matrix(day_df, sel_month, key_prefix + "temp_")
 
         st.markdown("---")
-        hourly_temperature_section(key_prefix + "hourly_")
+        hourly_temperature_section(key_prefix + "hourly_", sel_year, sel_month)
         st.markdown("---")
 
         temperature_supply_band_section(day_df, sel_month, key_prefix + "band_")
