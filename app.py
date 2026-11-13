@@ -1702,7 +1702,10 @@ def run_tab2_analysis():
         default_year = pick_default_year_2026(years_all)
         c1, c2, c3 = st.columns([1.2, 1.2, 1.6])
         with c1: sel_year = st.selectbox("기준 연도", years_all, index=years_all.index(default_year), key=f"{key_prefix}year")
-        with c2: sel_month = st.selectbox("기준 월", list(range(1, 13)), index=datetime.now(timezone(timedelta(hours=9))).month - 1, key=f"{key_prefix}month")  # 기본값: 현재 월(한국시간) 
+        # 기본값: 기준 연도에서 실적 데이터가 들어 있는 가장 최근 월 (데이터가 없으면 현재 월, 한국시간)
+        _has = long_df[(long_df["연"] == default_year) & (pd.to_numeric(long_df["값"], errors="coerce") > 0)]["월"]
+        default_month = int(_has.max()) if len(_has) else datetime.now(timezone(timedelta(hours=9))).month
+        with c2: sel_month = st.selectbox("기준 월", list(range(1, 13)), index=default_month - 1, key=f"{key_prefix}month")
         with c3: st.markdown(f"<div style='padding-top:28px;font-size:14px;color:#666;'>집계 기준: <b>당월(일별)</b></div>", unsafe_allow_html=True)
         st.markdown(f"<div style='margin-top:-4px;font-size:13px;color:#666;'>선택 기준: <b>{sel_year}년 {sel_month}월</b></div>", unsafe_allow_html=True)
         return sel_year, sel_month, years_all
@@ -2543,6 +2546,11 @@ def run_tab2_analysis():
             long_dummy["값"] = pd.to_numeric(month_df[act_col], errors="coerce")
             long_dummy = long_dummy.dropna(subset=["값"])
             sel_year, sel_month, years_all = render_section_selector_daily(long_dummy, "공급량(일) 기준 선택", "supplyD_base_")
+            # 맨 위 '기준 월'을 바꾸면 아래 섹션(기온 매트릭스·기온대별 공급량)의 '월 선택'도 같은 월로 맞춤
+            if st.session_state.get("supplyD_prev_top_month") != sel_month:
+                st.session_state.pop("supplyD_temp_month", None)
+                st.session_state.pop("supplyD_band_month", None)
+                st.session_state["supplyD_prev_top_month"] = sel_month
             st.markdown("---")
             supply_daily_main_logic(day_df, month_df, sel_year, sel_month, key_prefix="supplyD_")
     else:
