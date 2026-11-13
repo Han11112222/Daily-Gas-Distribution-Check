@@ -491,7 +491,7 @@ def render_abnormal_section(st_m, month: int, same_window: bool, upto_day: int):
     c4.metric(f"기준 연도({yr}) 평균", f"{st_m['curr']:.1f}℃",
               delta="이상기온 발생!" if st_m["is_abnormal"] else "정상 범위",
               delta_color="inverse" if st_m["is_abnormal"] else "normal")
-    st.plotly_chart(build_abnormal_figure(st_m), use_container_width=True)
+    plotly_show(build_abnormal_figure(st_m), use_container_width=True)
     if same_window:
         st.caption(f"※ 모든 연도를 {mo}월 1~{upto_day}일 평균기온으로 비교했습니다. 점 크기=같은 기간 공급량(M3)")
     else:
@@ -505,16 +505,53 @@ def kpi_card(label: str, rate: float, value_txt: str, delta_val: float, plan_txt
     up = delta_val >= 0
     d_color, d_bg = ("#09AB3B", "rgba(33,195,84,0.12)") if up else ("#FF2B2B", "rgba(255,43,43,0.10)")
     arrow = "↑" if up else "↓"
+    min_h = 330 if float(st.session_state.get("large_view_scale", 1.0)) > 1.0 else 200   # 크게 보기: 기온이 아래로 내려가도 세 카드 높이 동일
     return (
-        f'<div style="background:{bg};border-radius:10px;padding:18px 20px;min-height:200px;display:flex;'
-        f'justify-content:space-between;align-items:center;gap:12px;">'
-        f'<div><div style="font-size:14px;line-height:1.3;color:#31333F;">{label} <span style="font-size:16.8px;">{rate:.1f}%</span></div>'
+        f'<div style="background:{bg};border-radius:10px;padding:18px 20px;min-height:{min_h}px;display:flex;'
+        f'flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;">'
+        f'<div style="white-space:nowrap;"><div style="font-size:14px;line-height:1.3;color:#31333F;">{label} <span style="font-size:16.8px;">{rate:.1f}%</span></div>'
         f'<div style="font-size:36px;line-height:1.3;color:#31333F;margin-top:6px;">{value_txt}</div>'
         f'<div style="margin-top:6px;"><span style="font-size:14px;color:{d_color};background:{d_bg};'
         f'border-radius:12px;padding:2px 8px;">{arrow} {delta_val:+,.0f} GJ</span></div>'
         f'<div style="font-size:13px;color:#808495;margin-top:10px;">{plan_txt}</div></div>'
-        f'{right_html}</div>'
+        f'<div style="margin-left:auto;">{right_html}</div></div>'
     )
+
+
+def _scale_fig(fig: go.Figure, s: float) -> go.Figure:
+    """'크게 보기'용: 그래프의 글자·높이·여백을 배율 s만큼 키운 복사본을 돌려준다.
+    (Streamlit 기본 테마가 축 글자 크기를 따로 지정하므로, 축·범례·이름표 글자는 크기를 직접 지정해 키운다)"""
+    fig = go.Figure(fig)
+    lay = fig.layout
+    base = lay.font.size or 12
+
+    def bump(font):
+        font.size = round((font.size or base) * s, 1)
+
+    fig.update_layout(font_size=round(base * s, 1), height=round((lay.height or 450) * s))
+    for k in ("l", "r", "t", "b"):
+        v = getattr(lay.margin, k)
+        if v is not None:
+            setattr(lay.margin, k, round(v * s))
+    for a in lay.annotations:
+        bump(a.font)
+    for ax in list(fig.select_xaxes()) + list(fig.select_yaxes()):
+        bump(ax.tickfont)
+        bump(ax.title.font)
+    bump(lay.legend.font)
+    for t in fig.data:
+        tf = getattr(t, "textfont", None)
+        if tf is not None and isinstance(tf.size, (int, float)):
+            tf.size = round(tf.size * s, 1)
+    return fig
+
+
+def plotly_show(fig, **kwargs):
+    """st.plotly_chart 대용 — '크게 보기'가 켜져 있으면 그래프 글자도 함께 키워서 그린다."""
+    s = float(st.session_state.get("large_view_scale", 1.0))
+    if s != 1.0:
+        fig = _scale_fig(fig, s)
+    return st.plotly_chart(fig, **kwargs)
 
 
 # ─────────────────────────────────────────────────────────
@@ -1213,11 +1250,11 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
     if cont:
         month_start = last_day.replace(day=1)
         obs_m = obs[obs["dt"] >= month_start].copy()
-        st.plotly_chart(build_hourly_continuous_figure(obs_m, days, sheet_avg, supply), use_container_width=True)
+        plotly_show(build_hourly_continuous_figure(obs_m, days, sheet_avg, supply), use_container_width=True)
         st.caption(f"{obs_m['dt'].min():%m/%d %H:%M} ~ {obs_m['dt'].max():%m/%d %H:%M} · "
                    f"색 음영=선택한 {len(days)}일(진한 부분=날짜별 최저기온 지속 구간) · 주황 점선=일평균기온(구글시트)")
     else:
-        st.plotly_chart(build_hourly_compare_figure(days, supply_days), use_container_width=True)
+        plotly_show(build_hourly_compare_figure(days, supply_days), use_container_width=True)
         runs = " · ".join(f"{dd['label']} {dd['stats']['run_start']}~{dd['stats']['run_end']}시" for dd in days)
         st.caption(f"※ 음영=날짜별 최저기온에서 +{days[0]['stats']['tol']:g}℃ 이내로 이어진 구간 ({runs}) · "
                    "마름모=그날의 최저기온 · 점선·왼쪽 네모=일평균기온(구글시트) · 24시=다음날 00:00")
@@ -1452,7 +1489,7 @@ def run_tab1_management():
         else:
             _h2 = _hist_for_model.dropna(subset=["평균기온(℃)", "val_gj"])
             st.subheader("🧊 B. Heating Start / Slowdown — 수요곡선")
-            st.plotly_chart(build_heat_fig_demand(heat_model, _h2["평균기온(℃)"].to_numpy(float),
+            plotly_show(build_heat_fig_demand(heat_model, _h2["평균기온(℃)"].to_numpy(float),
                                                   (_h2["val_gj"] * 1000.0).to_numpy(float)),
                             use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
             st.subheader("🌡️ C. 기온별 공급량 변화량 요약")
@@ -1763,7 +1800,7 @@ def run_tab2_analysis():
             hovertemplate="<b>%{x}년 " + str(sel_m) + "월 %{y}일</b><br>🌡️ 평균기온: %{z:.1f}℃<extra></extra>"
         )
 
-        st.plotly_chart(fig_heatmap, use_container_width=True)
+        plotly_show(fig_heatmap, use_container_width=True)
         st.caption(f"{sel_m}월 기준 · 선택연도 {yr_range[0]}~{yr_range[1]}")
 
     def temperature_supply_band_section(day_df, default_month, key_prefix):
@@ -1815,7 +1852,7 @@ def run_tab2_analysis():
         )
         fig.update_xaxes(type='category', categoryorder='array', categoryarray=labels)
         fig.update_traces(texttemplate="%{text}일", textposition="outside")
-        st.plotly_chart(fig, use_container_width=True)
+        plotly_show(fig, use_container_width=True)
         
         display_tbl = grp.rename(columns={"평균공급량_GJ": "평균공급량(GJ)"})
         st.dataframe(center_style(display_tbl.style.format({"평균공급량(GJ)": "{:,.1f}"})), use_container_width=True, hide_index=True)
@@ -1974,7 +2011,7 @@ def run_tab2_analysis():
                                 range=[t_rng0, t_rng0 + t_w], tickmode="array", tickvals=t_ticks, showgrid=False,
                                 showline=False, zeroline=False, automargin=True, tickfont=dict(color=_ax, size=11)))
                 fig1.add_hline(y=s_rng0 + 0.29 * s_w, line_dash="dot", line_color="rgba(100,116,139,0.35)", line_width=1)  # 공급량/기온 구분선
-        st.plotly_chart(fig1, use_container_width=True)
+        plotly_show(fig1, use_container_width=True)
 
         # ─────────────────────────────────────────────
         # 📊 [NEW] 연도별 월 누적 공급량 · 평균기온 비교
@@ -2296,7 +2333,7 @@ def run_tab2_analysis():
                     fig_cum.update_layout(barmode="overlay")
                 if plan_temp is not None:   # 점선 오른쪽에 계획 기온 라벨이 들어갈 여백 확보
                     fig_cum.update_xaxes(range=[-0.5, len(cum_df) - 0.5 + 0.9])
-                st.plotly_chart(fig_cum, use_container_width=True)
+                plotly_show(fig_cum, use_container_width=True)
 
             with chart_col:
                 fmt = {"누적공급량(GJ)": "{:,.1f}", "평균기온(℃)": "{:.1f}", "최저기온(℃)": "{:.1f}",
@@ -2343,7 +2380,7 @@ def run_tab2_analysis():
                 margin=dict(l=10, r=10, t=40, b=10),
                 xaxis=dict(dtick=1, range=[0.5, 31.5]) 
             )
-            st.plotly_chart(fig2, use_container_width=True)
+            plotly_show(fig2, use_container_width=True)
             
             show = merged[["일자", "plan_gj", act_col, "편차_GJ"]].copy()
             show.columns = ["일자", "계획량(GJ)", "일별실적(GJ)", "편차(GJ)"]
@@ -2456,7 +2493,7 @@ def run_tab2_analysis():
                     xs = np.linspace(x.min() - 1, x.max() + 1, 150)
                     fig3.add_scatter(x=xs, y=p(xs), mode="lines", name="3차 다항 회귀", line=dict(color="#FF4B4B", width=2))
             fig3.update_layout(title=f"{sel_month}월 기온별 공급량", xaxis_title="기온(℃)", yaxis_title="공급량 (GJ)", margin=dict(l=10, r=10, t=40, b=10))
-            st.plotly_chart(fig3, use_container_width=True)
+            plotly_show(fig3, use_container_width=True)
         
         st.markdown("---")
         temperature_matrix(day_df, sel_month, key_prefix + "temp_")
@@ -2814,7 +2851,7 @@ def _render_contract_version(key: str, piv: pd.DataFrame, src: str, cd: dict, la
     with verdict_slot:
         _verdict(label, out_mask, over)
 
-    st.plotly_chart(build_contract_figure(contract, hist, mx, mn, out_mask, label, revised, rev_out, x_labels),
+    plotly_show(build_contract_figure(contract, hist, mx, mn, out_mask, label, revised, rev_out, x_labels),
                     use_container_width=True,
                     config={"scrollZoom": True, "displaylogo": False},   # 마우스 휠로 확대·축소
                     key=f"{key}_chart")
@@ -3008,7 +3045,7 @@ def render_kogas5_section(file_bytes):
                                  gridcolor="rgba(148,163,184,0.20)", zeroline=False, range=[0, float(tot.max()) * 1.15]),
                       xaxis=dict(showgrid=False),
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-    st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displaylogo": False}, key="kogas5_chart")
+    plotly_show(fig, use_container_width=True, config={"scrollZoom": True, "displaylogo": False}, key="kogas5_chart")
 
     # ── 폭포수(브릿지) 차트: 첫해 → 마지막해 용도별 증감 ──
     y0, y1 = df.index.min(), df.index.max()
@@ -3066,7 +3103,7 @@ def render_kogas5_section(file_bytes):
                      xaxis=dict(showgrid=False, tickfont=dict(color="#6B7280", size=12), categoryorder="array", categoryarray=labels))
     wf.add_annotation(xref="paper", yref="paper", x=1, y=1.12, showarrow=False, text="단위: 천m³",
                       font=dict(size=12, color="#6B7280"))
-    st.plotly_chart(wf, use_container_width=True, config={"scrollZoom": True, "displaylogo": False}, key="kogas5_wf")
+    plotly_show(wf, use_container_width=True, config={"scrollZoom": True, "displaylogo": False}, key="kogas5_wf")
     show = df.T.copy()
     show.columns = xs
     first_y, last_y = df.index.min(), df.index.max()
@@ -3201,23 +3238,29 @@ menu = st.sidebar.radio("이동", ["1. 도시가스 공급실적 관리", "2. �
 
 
 def render_large_view_control():
-    """[최상단] '크게 보기' 토글 — 켜면 본문 전체(글자·카드·표·그래프)를 배율만큼 확대.
-    CSS zoom 방식이라 코드 안의 px 고정 글자(카드·HTML 표)와 그래프까지 한 번에 커진다."""
+    """[최상단] '크게 보기' 토글 — 켜면 본문 글씨·카드·HTML 표를 배율만큼 확대.
+    그래프(plotly)와 입력 표(dataframe)는 CSS zoom 안에서 크기 계산이 어긋나 잘리므로 zoom을 상쇄하고,
+    그래프는 plotly_show()가 글자·높이를 직접 키운다."""
     _sp, _c_tg, _c_lv = st.columns([5, 1.4, 2.2])
     with _c_tg:
         big = st.toggle("🔍 크게 보기", value=False, key="large_view",
                         help="본문 글씨와 표·그래프를 함께 확대합니다. 끄면 원래 크기로 돌아옵니다.")
     if not big:
+        st.session_state["large_view_scale"] = 1.0
         return
     with _c_lv:
         pct = st.select_slider("확대 배율", options=[115, 130, 150, 175], value=130,
                                format_func=lambda v: f"{v}%", key="large_view_pct",
                                label_visibility="collapsed")
+    z = pct / 100
+    st.session_state["large_view_scale"] = z
     st.markdown(
         f"""<style>
         section.main .block-container,
         [data-testid="stMain"] .block-container,
-        [data-testid="stAppViewBlockContainer"] {{ zoom: {pct / 100:.2f}; }}
+        [data-testid="stAppViewBlockContainer"] {{ zoom: {z:.2f}; }}
+        .stPlotlyChart, [data-testid="stPlotlyChart"] {{ zoom: {1 / z:.5f}; }}
+        [data-testid="stDataFrame"] {{ zoom: {1 / z:.5f}; width: {z * 100:.0f}% !important; }}
         </style>""",
         unsafe_allow_html=True,
     )
