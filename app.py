@@ -3258,11 +3258,12 @@ def apply_large_view():
     )
 
 
-apply_large_view()
-
 if menu == "1. 도시가스 공급실적 관리":
+    apply_large_view()                       # 1번 탭만 확대(130%)
     run_tab1_management()
 elif menu == "2. 공급량 분석":
+    st.session_state["large_view_scale"] = 1.0   # 2·3번 탭은 100% 유지
     run_tab2_analysis()
 else:
+    st.session_state["large_view_scale"] = 1.0
     run_tab3_contract()
