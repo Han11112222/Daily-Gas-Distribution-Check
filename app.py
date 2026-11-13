@@ -1445,8 +1445,8 @@ def run_tab1_management():
     st.markdown("<br>", unsafe_allow_html=True)
     render_temp_effect_box(heat_model, ts_abn, target_date, day_temp, current_val_gj, plan_val_gj)
 
-    # ── 설명 박스 바로 아래: 1도 변화에 따른 공급량 변화 (기본: 숨김) ──
-    if st.toggle("1도 변화에 따른 공급량 변화", value=False, key="show_sens"):
+    # ── 설명 박스 바로 아래: 1도 변화에 따른 공급량 변화 (기본: 활성화) ──
+    if st.toggle("1도 변화에 따른 공급량 변화", value=True, key="show_sens"):
         if heat_model is None:
             st.info("기온–공급량 관계를 계산할 과거 자료가 부족합니다.")
         else:
