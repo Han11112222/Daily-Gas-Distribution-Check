@@ -798,62 +798,49 @@ NUM_COMMA_FORMAT = "localized" if _supports_localized_number_format() else None
 
 
 # ─────────────────────────────────────────────────────────
-# [공통 함수 4] 시간대별 기온 (기상청 ASOS 시간자료: OBS_ASOS*.csv)
-#  - 파일명 뒤의 숫자(다운로드 시각)는 매번 바뀌므로 'OBS_ASOS'로 시작하는 csv를 모두 찾아 사용
-#  - 파일이 여러 개면 합쳐서 쓰고, 같은 시각이 겹치면 가장 최근에 받은 파일 값을 사용
-#  - 시각 기준: 기상청 관행대로 '24시 = 다음날 00:00' (하루 = 1시 ~ 24시)
+# [공통 함수 4] 시간대별 기온 (구글시트: 일별 실적 시트의 0:00 ~ 23:00 열)
+#  - 일별 실적과 같은 시트(gid=0)를 사용. 날짜 행마다 O열 이후 '0:00', '1:00' … '23:00' 열에 시간별 기온(℃)이 들어 있음
+#  - 지점 열이 있으면 대구(143)만 사용
+#  - 시각 기준: 시트의 '날짜 + n:00' = 그 시각의 관측값. 기상청 관행대로 '24시 = 다음날 00:00' (하루 = 1시 ~ 24시)로 환산
+#    (예: 11/13 행의 0:00 값 → 11/12의 24시)
 # ─────────────────────────────────────────────────────────
-def _obs_asos_files() -> List[Path]:
-    """app.py와 같은 폴더의 OBS_ASOS*.csv를 오래된 순 → 최신 순으로 반환"""
-    base = Path(__file__).parent
-    files = [
-        p for p in base.iterdir()
-        if p.is_file() and p.suffix.lower() == ".csv" and p.name.upper().startswith("OBS_ASOS")
-    ]
-
-    def _key(p):
-        nums = re.findall(r"\d{8,14}", p.stem)  # 파일명 속 다운로드 시각(예: 20261030083256)
-        return (nums[-1].ljust(14, "0") if nums else "", p.stat().st_mtime)
-
-    return sorted(files, key=_key)
+HOURLY_STATION_ID = 143
 
 
-def _obs_signature():
-    """파일 목록/수정시각이 바뀌면 캐시를 새로 만들기 위한 키"""
-    return tuple((p.name, p.stat().st_mtime) for p in _obs_asos_files())
-
-
-def _read_obs_csv(path: Path) -> Optional[pd.DataFrame]:
-    for enc in ("cp949", "utf-8-sig", "euc-kr"):
-        try:
-            raw = pd.read_csv(path, encoding=enc)
-        except Exception:
-            continue
-        raw.columns = [str(c).strip() for c in raw.columns]
-        col_dt = next((c for c in raw.columns if "일시" in c), None)
-        col_t = next((c for c in raw.columns
-                      if "기온" in c and "QC" not in c.upper() and "플래그" not in c), None)
-        if col_dt is None or col_t is None:
-            continue  # 인코딩이 안 맞아 열 이름이 깨졌으면 다음 인코딩 시도
-        out = pd.DataFrame({
-            "dt": pd.to_datetime(raw[col_dt], errors="coerce"),
-            "temp": pd.to_numeric(raw[col_t], errors="coerce"),
-        })
-        col_stn = next((c for c in raw.columns if c == "지점"), None)
-        if col_stn is not None and (pd.to_numeric(raw[col_stn], errors="coerce") == 143).any():
-            out = out[pd.to_numeric(raw[col_stn], errors="coerce").values == 143]  # 대구만
-        return out.dropna(subset=["dt", "temp"])
-    return None
-
-
-@st.cache_data(show_spinner=False, ttl=600)
-def load_obs_hourly(signature):
-    """OBS_ASOS*.csv 전부를 합쳐 (dt, 일자, 시, temp) 형태로 반환. 없으면 None"""
-    frames = [f for f in (_read_obs_csv(p) for p in _obs_asos_files()) if f is not None and not f.empty]
-    if not frames:
+@st.cache_data(show_spinner=False, ttl=300)
+def load_obs_hourly(signature=None):
+    """구글시트의 시간대별 기온을 (dt, 일자, 시, temp) 형태로 반환. 읽지 못하거나 시간 열이 없으면 None"""
+    url = f"https://docs.google.com/spreadsheets/d/{PLAN_SHEET_ID}/export?format=csv&gid=0"
+    try:
+        raw = pd.read_csv(url)
+    except Exception:
         return None
-    df = pd.concat(frames, ignore_index=True)           # 오래된 파일 → 최신 파일 순
-    df = df.drop_duplicates("dt", keep="last").sort_values("dt")
+    raw.columns = [str(c).strip() for c in raw.columns]
+
+    col_d = next((c for c in raw.columns if "일자" in c or "date" in c.lower()), None)
+    hour_cols = {}
+    for c in raw.columns:
+        m = re.fullmatch(r"(\d{1,2}):(\d{2})(?::\d{2})?", c)       # '0:00', '13:00', '0:00:00' 형태의 열 이름
+        if m and int(m.group(2)) == 0 and 0 <= int(m.group(1)) <= 23:
+            hour_cols[c] = int(m.group(1))
+    if col_d is None or not hour_cols:
+        return None
+
+    if "지점" in raw.columns:                                         # 대구만 (지점 열이 숫자일 때)
+        stn = pd.to_numeric(raw["지점"], errors="coerce")
+        if (stn == HOURLY_STATION_ID).any():
+            raw = raw[stn == HOURLY_STATION_ID]
+
+    day0 = pd.to_datetime(raw[col_d], errors="coerce").dt.normalize()
+    wide = raw[list(hour_cols)].apply(
+        lambda s_: pd.to_numeric(s_.astype(str).str.replace(",", ""), errors="coerce"))
+    wide.insert(0, "_day", day0)
+    long = wide.dropna(subset=["_day"]).melt(id_vars="_day", var_name="col", value_name="temp").dropna(subset=["temp"])
+    if long.empty:
+        return None
+    long["dt"] = long["_day"] + pd.to_timedelta(long["col"].map(hour_cols), unit="h")
+
+    df = long[["dt", "temp"]].drop_duplicates("dt", keep="last").sort_values("dt")
     df["일자"] = (df["dt"] - pd.Timedelta(minutes=1)).dt.normalize()   # 00:00 → 전날 24시
     df["시"] = df["dt"].dt.hour.replace(0, 24)
     return df[["dt", "일자", "시", "temp"]].reset_index(drop=True)
@@ -1184,10 +1171,10 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
     if not show:
         return
 
-    obs = load_obs_hourly(_obs_signature())
+    obs = load_obs_hourly()
     if obs is None or obs.empty:
-        st.info("app.py와 같은 폴더에 `OBS_ASOS`로 시작하는 기상청 시간자료 CSV가 없습니다. "
-                "(파일명 뒤 숫자는 달라도 됩니다. 예: OBS_ASOS_TIM_20261030083256.csv)")
+        st.info("구글시트에서 시간대별 기온(0:00 ~ 23:00 열)을 읽지 못했습니다. "
+                "시트 공유 설정과 열 이름('0:00', '1:00' …)을 확인해 주세요.")
         return
 
     # '최신일' = 24시간이 모두 들어온 마지막 날 (아직 진행 중인 날은 제외 → 전날과 공정하게 비교)
@@ -1227,7 +1214,7 @@ def hourly_temperature_section(key_prefix: str = "hourly_"):
     cap_slot.caption(f"비교 기간: 최신일({last_day:%m/%d}) 기준 {pick}까지 총 {n_back + 1}일 · "
                      f"시간자료 최신 관측 {obs['dt'].max():%Y-%m-%d %H:%M}"
                      + (f" · {partial_day:%m/%d}은 아직 24시간이 모이지 않아 비교에서 제외 (이어보기에는 표시)" if partial_day is not None else "")
-                     + f" · 불러온 파일 {len(_obs_asos_files())}개")
+                     + " · 출처: 구글시트")
 
     # 평균기온은 구글시트(기상청 일평균) 값을 사용, 시트에 없으면 시간자료로 대체
     ts = load_temperature_sheet()
@@ -3309,7 +3296,7 @@ def auto_refresh_watcher():
         sig = _hist_signature()
         if sig is not None and sig != st.session_state.get("hist_sig"):
             st.session_state["hist_sig"] = sig
-            for _f in (load_temperature_sheet, load_2026_plan_with_source, load_monthly_m3_history):
+            for _f in (load_temperature_sheet, load_2026_plan_with_source, load_monthly_m3_history, load_obs_hourly):
                 _f.clear()
             st.session_state.pop("tab1_df", None)                     # 시트 기준으로 다시 구성
             st.session_state["auto_update_msg"] = f"{sig[0]} 공급량·기온 입력이 확인되어 화면을 자동으로 업데이트했습니다."
