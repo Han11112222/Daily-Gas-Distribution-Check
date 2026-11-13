@@ -191,6 +191,22 @@ def load_historical_data_common():
         else: 
             df['val_m3'] = 0
             
+        # [자동 업데이트 기준] 공급량(MJ)·공급량(M3)·평균기온·최저·최고가 모두 채워진 날만 '입력 완료'로 본다.
+        # 수기로 공급량만 먼저 붙여넣고 기온이 아직 비어 있는 날(= 마지막 완결일 이후)은 화면에 반영하지 않는다.
+        def _filled(c):
+            return pd.to_numeric(df[c].astype(str).str.replace(',', ''), errors='coerce').notna()
+        col_min = next((c for c in df.columns if "최저" in c), None)
+        col_max = next((c for c in df.columns if "최고" in c), None)
+        ok = df['val_gj'] > 0
+        if col_m3:
+            ok &= df['val_m3'] > 0
+        if "평균기온(℃)" in df.columns:
+            ok &= _filled("평균기온(℃)")
+        for _c in (col_min, col_max):
+            if _c:
+                ok &= _filled(_c)
+        if ok.any():
+            df = df[df[col_date] <= df.loc[ok, col_date].max()]
         df = df[df['val_gj'] > 0].copy()
         
         if "평균기온(℃)" in df.columns:
@@ -3257,6 +3273,56 @@ def apply_large_view():
         unsafe_allow_html=True,
     )
 
+
+# ==============================================================================
+# [자동 업데이트] 구글시트에 새 날짜의 공급량·기온(B~F열)이 모두 입력되면 화면을 자동으로 갱신
+#  - 60초마다 시트를 다시 읽어 '마지막 완결일 / 합계'가 바뀌었는지 확인 → 바뀌면 캐시 비우고 전체 새로고침
+#  - 조회 기준일은 새 최신일로 자동 이동, '실적 입력' 표의 화면상 수정값은 시트 기준으로 다시 불러옴
+# ==============================================================================
+WATCH_INTERVAL_SEC = 60
+
+
+def _hist_signature():
+    h = load_historical_data_common()
+    if h is None or h.empty:
+        return None
+    return (str(pd.Timestamp(h["일자"].max()).date()), int(len(h)),
+            round(float(h["val_gj"].sum()), 1), round(float(h["val_m3"].sum()), 1))
+
+
+def auto_refresh_watcher():
+    import time
+    msg = st.session_state.pop("auto_update_msg", None)
+    if msg:
+        st.toast(msg, icon="📥")
+
+    def _check():
+        now = time.time()
+        if "hist_sig" not in st.session_state:                       # 처음: 현재 상태를 기준으로 저장
+            st.session_state["hist_sig"] = _hist_signature()
+            st.session_state["hist_sig_t"] = now
+            return
+        if now - st.session_state.get("hist_sig_t", 0) < WATCH_INTERVAL_SEC - 5:
+            return                                                    # 화면 조작으로 다시 실행된 경우엔 시트를 또 읽지 않음
+        st.session_state["hist_sig_t"] = now
+        load_historical_data_common.clear()                           # 시트를 새로 읽기
+        sig = _hist_signature()
+        if sig is not None and sig != st.session_state.get("hist_sig"):
+            st.session_state["hist_sig"] = sig
+            for _f in (load_temperature_sheet, load_2026_plan_with_source, load_monthly_m3_history):
+                _f.clear()
+            st.session_state.pop("tab1_df", None)                     # 시트 기준으로 다시 구성
+            st.session_state["auto_update_msg"] = f"{sig[0]} 공급량·기온 입력이 확인되어 화면을 자동으로 업데이트했습니다."
+            st.rerun()
+
+    try:
+        st.fragment(run_every=f"{WATCH_INTERVAL_SEC}s")(_check)()
+    except (AttributeError, TypeError):
+        _check()                                                      # 구버전 Streamlit: 화면 조작 시에만 확인
+
+
+if menu in ("1. 도시가스 공급실적 관리", "2. 공급량 분석"):
+    auto_refresh_watcher()
 
 if menu == "1. 도시가스 공급실적 관리":
     apply_large_view()                       # 1번 탭만 확대(130%)
