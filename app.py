@@ -505,10 +505,10 @@ def kpi_card(label: str, rate: float, value_txt: str, delta_val: float, plan_txt
     up = delta_val >= 0
     d_color, d_bg = ("#09AB3B", "rgba(33,195,84,0.12)") if up else ("#FF2B2B", "rgba(255,43,43,0.10)")
     arrow = "↑" if up else "↓"
-    min_h = 330 if float(st.session_state.get("large_view_scale", 1.0)) > 1.0 else 200   # 크게 보기: 기온이 아래로 내려가도 세 카드 높이 동일
+    min_h = 200
     return (
-        f'<div style="background:{bg};border-radius:10px;padding:18px 20px;min-height:{min_h}px;display:flex;'
-        f'flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;">'
+        f'<div style="background:{bg};border-radius:10px;padding:18px 16px;min-height:{min_h}px;display:flex;'
+        f'flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;">'
         f'<div style="white-space:nowrap;"><div style="font-size:14px;line-height:1.3;color:#31333F;">{label} <span style="font-size:16.8px;">{rate:.1f}%</span></div>'
         f'<div style="font-size:36px;line-height:1.3;color:#31333F;margin-top:6px;">{value_txt}</div>'
         f'<div style="margin-top:6px;"><span style="font-size:14px;color:{d_color};background:{d_bg};'
@@ -1422,7 +1422,7 @@ def run_tab1_management():
     kind_m = stat_m["kind"] if stat_m else None
 
     st.markdown("### 🔥 열량 실적 (GJ)")
-    col_g1, col_g2, col_g3 = st.columns(3)
+    col_g1, col_g2, col_g3 = st.columns([1.6, 1.6, 1])   # 일간·월간 카드(공급량+기온)를 넓게, 연간 카드는 좁게
 
     with col_g1:
         diff_gj = current_val_gj - plan_val_gj
