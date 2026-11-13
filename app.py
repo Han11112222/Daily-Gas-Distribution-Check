@@ -511,8 +511,8 @@ def kpi_card(label: str, rate: float, value_txt: str, delta_val: float, plan_txt
         f'flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;">'
         f'<div style="white-space:nowrap;"><div style="font-size:14px;line-height:1.3;color:#31333F;">{label} <span style="font-size:16.8px;">{rate:.1f}%</span></div>'
         f'<div style="font-size:36px;line-height:1.3;color:#31333F;margin-top:6px;">{value_txt}</div>'
-        f'<div style="margin-top:6px;"><span style="font-size:14px;color:{d_color};background:{d_bg};'
-        f'border-radius:12px;padding:2px 8px;">{arrow} {delta_val:+,.0f} GJ</span></div>'
+        f'<div style="margin-top:6px;"><span style="font-size:16.8px;color:{d_color};background:{d_bg};'
+        f'border-radius:14px;padding:3px 10px;">{arrow} {delta_val:+,.0f} GJ</span></div>'
         f'<div style="font-size:13px;color:#808495;margin-top:10px;">{plan_txt}</div></div>'
         f'<div style="margin-left:auto;">{right_html}</div></div>'
     )
@@ -3237,22 +3237,14 @@ st.sidebar.title("통합 메뉴")
 menu = st.sidebar.radio("이동", ["1. 도시가스 공급실적 관리", "2. 공급량 분석", "3. 약정물량"])
 
 
-def render_large_view_control():
-    """[최상단] '크게 보기' 토글 — 켜면 본문 글씨·카드·HTML 표를 배율만큼 확대.
-    그래프(plotly)와 입력 표(dataframe)는 CSS zoom 안에서 크기 계산이 어긋나 잘리므로 zoom을 상쇄하고,
+LARGE_VIEW_PCT = 130   # 화면 기본 확대 비율(%) — 바꾸려면 이 숫자만 수정
+
+
+def apply_large_view():
+    """본문 글씨·카드·HTML 표를 항상 LARGE_VIEW_PCT%로 확대.
+    그래프(plotly)와 표(dataframe)는 CSS zoom 안에서 크기 계산이 어긋나 잘리므로 zoom을 상쇄하고,
     그래프는 plotly_show()가 글자·높이를 직접 키운다."""
-    _sp, _c_tg, _c_lv = st.columns([5, 1.4, 2.2])
-    with _c_tg:
-        big = st.toggle("🔍 크게 보기", value=False, key="large_view",
-                        help="본문 글씨와 표·그래프를 함께 확대합니다. 끄면 원래 크기로 돌아옵니다.")
-    if not big:
-        st.session_state["large_view_scale"] = 1.0
-        return
-    with _c_lv:
-        pct = st.select_slider("확대 배율", options=[115, 130, 150, 175], value=130,
-                               format_func=lambda v: f"{v}%", key="large_view_pct",
-                               label_visibility="collapsed")
-    z = pct / 100
+    z = LARGE_VIEW_PCT / 100
     st.session_state["large_view_scale"] = z
     st.markdown(
         f"""<style>
@@ -3266,7 +3258,7 @@ def render_large_view_control():
     )
 
 
-render_large_view_control()
+apply_large_view()
 
 if menu == "1. 도시가스 공급실적 관리":
     run_tab1_management()
