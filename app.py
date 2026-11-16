@@ -696,36 +696,33 @@ def effect_segments(model, t_plan, t_act):
 
 
 def render_prev_day_check(model, df, target_date):
-    """달성률 카드 바로 아래: 전일(D-1) 평균기온을 3차 다항식에 대입한 예측 vs 전일 실적"""
-    heat_model = model
-    if heat_model is None:
+    """달성률 카드 바로 아래: 조회 기준일(화면에 표시된 최신 일자)의 평균기온을 3차 다항식에 대입한 예측 vs 실적"""
+    if model is None:
         return
-    # ── D. 전일(D-1) 실제 평균기온을 3차 다항식에 대입 → 예측 공급량 vs 전일 실적 ──
-    st.subheader("🔎 D. 전일 기온 대입 비교 (3차 다항식 예측 vs 실적)")
-    prev_date = target_date - pd.Timedelta(days=1)
-    prev_row = df[df['날짜'] == prev_date]
-    prev_t = np.nan
-    prev_act = 0.0
-    if not prev_row.empty:
-        prev_t = pd.to_numeric(prev_row['평균기온(℃)'].iloc[0], errors='coerce')
-        prev_act = float(prev_row['실적(GJ)'].iloc[0])
-    if pd.isna(prev_t) or prev_act <= 0:
-        st.info(f"전일({prev_date.month}/{prev_date.day})의 평균기온 또는 실적이 비어 있어 비교할 수 없습니다.")
-    else:
-        prev_t = float(prev_t)
-        prev_pred = float(heat_q(heat_model, prev_t)) / 1000.0   # MJ → GJ
-        prev_diff = prev_act - prev_pred
-        prev_pct = prev_act / prev_pred * 100 if prev_pred > 0 else 0.0
-        st.markdown(
-            f"**{prev_date.month}/{prev_date.day}** 실제 평균기온 **{prev_t:.1f}℃**를 3차 다항식에 대입하면 "
-            f"**{prev_pred:,.0f} GJ**, 전일 실적은 **{prev_act:,.0f} GJ** 입니다.")
-        d1, d2, d3 = st.columns(3)
-        d1.metric(f"기온 {prev_t:.1f}℃ 대입 예측", f"{prev_pred:,.0f} GJ")
-        d2.metric(f"{prev_date.month}/{prev_date.day} 실적", f"{prev_act:,.0f} GJ")
-        d3.metric("실적 − 예측", f"{prev_diff:+,.0f} GJ", delta=f"실적/예측 {prev_pct:.1f}%",
-                  delta_color="off")
-        st.caption("※ 예측값 = 3차 다항식(아래 C 항목) y(MJ)에 전일 평균기온(T)을 넣고 GJ로 환산한 값. "
-                   "차이에는 요일·휴일, 고객 증가, 기온 외 요인이 포함됩니다.")
+    st.subheader("🔎 전일 기온 대입 (3차 다항식 예측 vs 비교)")
+    row = df[df['날짜'] == target_date]
+    t_val = np.nan
+    act = 0.0
+    if not row.empty:
+        t_val = pd.to_numeric(row['평균기온(℃)'].iloc[0], errors='coerce')
+        act = float(row['실적(GJ)'].iloc[0])
+    md = f"{target_date.month}/{target_date.day}"
+    if pd.isna(t_val) or act <= 0:
+        st.info(f"{md}의 평균기온 또는 실적이 비어 있어 비교할 수 없습니다.")
+        return
+    t_val = float(t_val)
+    pred = float(heat_q(model, t_val)) / 1000.0   # MJ → GJ
+    diff = act - pred
+    pct = act / pred * 100 if pred > 0 else 0.0
+    st.markdown(
+        f"<b>{md}</b> 실제 평균기온 <b>{t_val:.1f}℃</b>를 3차 다항식에 대입하면 "
+        f"<b>{pred:,.0f} GJ</b>, {md} 실적은 <b>{act:,.0f} GJ</b> 입니다.", unsafe_allow_html=True)
+    d1, d2, d3 = st.columns(3)
+    d1.metric(f"기온 {t_val:.1f}℃ 대입 예측", f"{pred:,.0f} GJ")
+    d2.metric(f"{md} 실적", f"{act:,.0f} GJ")
+    d3.metric("실적 − 예측", f"{diff:+,.0f} GJ", delta=f"실적/예측 {pct:.1f}%", delta_color="off")
+    st.caption("※ 예측값 = 과거 실적으로 만든 3차 다항식(아래 C 항목)에 해당일 평균기온을 넣고 GJ로 환산한 값. "
+               "일일계획은 월 공급량을 확정한 뒤 배분한 값이라 기온 기준이 아니므로, 기온 기준 예측과 별도로 비교용입니다.")
 
 
 def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
