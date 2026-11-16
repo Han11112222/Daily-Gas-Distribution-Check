@@ -1521,6 +1521,33 @@ def run_tab1_management():
             st.markdown(md)
             st.caption(f"R²={heat_model['r2']:.3f} · 구글시트 일별 실적 전체 기간 기준")
 
+            # ── D. 전일(D-1) 실제 평균기온을 3차 다항식에 대입 → 예측 공급량 vs 전일 실적 ──
+            st.subheader("🔎 D. 전일 기온 대입 비교 (3차 다항식 예측 vs 실적)")
+            prev_date = target_date - pd.Timedelta(days=1)
+            prev_row = df[df['날짜'] == prev_date]
+            prev_t = np.nan
+            prev_act = 0.0
+            if not prev_row.empty:
+                prev_t = pd.to_numeric(prev_row['평균기온(℃)'].iloc[0], errors='coerce')
+                prev_act = float(prev_row['실적(GJ)'].iloc[0])
+            if pd.isna(prev_t) or prev_act <= 0:
+                st.info(f"전일({prev_date.month}/{prev_date.day})의 평균기온 또는 실적이 비어 있어 비교할 수 없습니다.")
+            else:
+                prev_t = float(prev_t)
+                prev_pred = float(heat_q(heat_model, prev_t)) / 1000.0   # MJ → GJ
+                prev_diff = prev_act - prev_pred
+                prev_pct = prev_act / prev_pred * 100 if prev_pred > 0 else 0.0
+                st.markdown(
+                    f"**{prev_date.month}/{prev_date.day}** 실제 평균기온 **{prev_t:.1f}℃**를 3차 다항식에 대입하면 "
+                    f"**{prev_pred:,.0f} GJ**, 전일 실적은 **{prev_act:,.0f} GJ** 입니다.")
+                d1, d2, d3 = st.columns(3)
+                d1.metric(f"기온 {prev_t:.1f}℃ 대입 예측", f"{prev_pred:,.0f} GJ")
+                d2.metric(f"{prev_date.month}/{prev_date.day} 실적", f"{prev_act:,.0f} GJ")
+                d3.metric("실적 − 예측", f"{prev_diff:+,.0f} GJ", delta=f"실적/예측 {prev_pct:.1f}%",
+                          delta_color="off")
+                st.caption("※ 예측값 = 위 3차 다항식 y(MJ)에 전일 평균기온(T)을 넣고 GJ로 환산한 값. "
+                           "차이에는 요일·휴일, 고객 증가, 기온 외 요인이 포함됩니다.")
+
 
     # ── [열량 실적 하단] 이상기온 판별 상세 ──
     st.markdown("<br>", unsafe_allow_html=True)
