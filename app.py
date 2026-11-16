@@ -725,8 +725,8 @@ def render_prev_day_check(model, df, target_date):
     badge = (f'<div style="margin-top:6px;"><span style="font-size:16.8px;color:{d_color};background:{d_bg};'
              f'border-radius:14px;padding:3px 10px;">{"↑" if diff >= 0 else "↓"} 실적/예측 {pct:.1f}%</span></div>')
     st.markdown(
-        '<div style="background:#D4E6FF;border-radius:10px;padding:18px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;">'
-        + _item(f"기온 {t_val:.1f}℃ 대입 예측", f"{pred:,.0f} GJ")
+        '<div style="background:#F0F2F6;border-radius:10px;padding:18px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;">'
+        + _item(f"실제기온 {t_val:.1f}℃ 적용", f"{pred:,.0f} GJ")
         + _item(f"{md} 실적", f"{act:,.0f} GJ")
         + _item("실적 − 예측", f"{diff:+,.0f} GJ", badge)
         + '</div>', unsafe_allow_html=True)
