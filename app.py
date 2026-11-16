@@ -1714,9 +1714,8 @@ def run_tab2_analysis():
         default_year = pick_default_year_2026(years_all)
         c1, c2, c3 = st.columns([1.2, 1.2, 1.6])
         with c1: sel_year = st.selectbox("기준 연도", years_all, index=years_all.index(default_year), key=f"{key_prefix}year")
-        # 기본값: 기준 연도에서 실적 데이터가 들어 있는 가장 최근 월 (데이터가 없으면 현재 월, 한국시간)
-        _has = long_df[(long_df["연"] == default_year) & (pd.to_numeric(long_df["값"], errors="coerce") > 0)]["월"]
-        default_month = int(_has.max()) if len(_has) else datetime.now(timezone(timedelta(hours=9))).month
+        # 기본값: 현재 월 (한국시간 기준)
+        default_month = datetime.now(timezone(timedelta(hours=9))).month
         with c2: sel_month = st.selectbox("기준 월", list(range(1, 13)), index=default_month - 1, key=f"{key_prefix}month")
         with c3: st.markdown(f"<div style='padding-top:28px;font-size:14px;color:#666;'>집계 기준: <b>당월(일별)</b></div>", unsafe_allow_html=True)
         st.markdown(f"<div style='margin-top:-4px;font-size:13px;color:#666;'>선택 기준: <b>{sel_year}년 {sel_month}월</b></div>", unsafe_allow_html=True)
