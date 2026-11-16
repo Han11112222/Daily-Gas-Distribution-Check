@@ -717,10 +717,19 @@ def render_prev_day_check(model, df, target_date):
     st.markdown(
         f"<b>{md}</b> 실제 평균기온 <b>{t_val:.1f}℃</b>를 3차 다항식에 대입하면 "
         f"<b>{pred:,.0f} GJ</b>, {md} 실적은 <b>{act:,.0f} GJ</b> 입니다.", unsafe_allow_html=True)
-    d1, d2, d3 = st.columns(3)
-    d1.metric(f"기온 {t_val:.1f}℃ 대입 예측", f"{pred:,.0f} GJ")
-    d2.metric(f"{md} 실적", f"{act:,.0f} GJ")
-    d3.metric("실적 − 예측", f"{diff:+,.0f} GJ", delta=f"실적/예측 {pct:.1f}%", delta_color="off")
+    d_color = "#09AB3B" if diff >= 0 else "#FF2B2B"
+    d_bg = "rgba(33,195,84,0.12)" if diff >= 0 else "rgba(255,43,43,0.10)"
+    def _item(label, value, extra=""):
+        return (f'<div style="flex:1;min-width:200px;"><div style="font-size:14px;line-height:1.3;color:#31333F;">{label}</div>'
+                f'<div style="font-size:36px;line-height:1.3;color:#31333F;margin-top:6px;white-space:nowrap;">{value}</div>{extra}</div>')
+    badge = (f'<div style="margin-top:6px;"><span style="font-size:16.8px;color:{d_color};background:{d_bg};'
+             f'border-radius:14px;padding:3px 10px;">{"↑" if diff >= 0 else "↓"} 실적/예측 {pct:.1f}%</span></div>')
+    st.markdown(
+        '<div style="background:#D4E6FF;border-radius:10px;padding:18px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;">'
+        + _item(f"기온 {t_val:.1f}℃ 대입 예측", f"{pred:,.0f} GJ")
+        + _item(f"{md} 실적", f"{act:,.0f} GJ")
+        + _item("실적 − 예측", f"{diff:+,.0f} GJ", badge)
+        + '</div>', unsafe_allow_html=True)
     st.caption("※ 예측값 = 과거 실적으로 만든 3차 다항식(아래 C 항목)에 해당일 평균기온을 넣고 GJ로 환산한 값. "
                "일일계획은 월 공급량을 확정한 뒤 배분한 값이라 기온 기준이 아니므로, 기온 기준 예측과 별도로 비교용입니다.")
 
