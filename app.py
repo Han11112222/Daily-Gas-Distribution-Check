@@ -730,8 +730,8 @@ def render_prev_day_check(model, df, target_date):
         + _item(f"{md} 실적", f"{act:,.0f} GJ")
         + _item("실적 − 예측", f"{diff:+,.0f} GJ", badge)
         + '</div>', unsafe_allow_html=True)
-    st.caption("※ 예측값 = 과거 실적으로 만든 3차 다항식(아래 C 항목)에 해당일 평균기온을 넣고 GJ로 환산한 값. "
-               "일일계획은 월 공급량을 확정한 뒤 배분한 값이라 기온 기준이 아니므로, 기온 기준 예측과 별도로 비교용입니다.")
+    st.caption("※ 예측값 = 과거 실적으로 만든 3차 다항식(아래 C 항목)에 해당일 평균기온을 넣고 GJ로 환산한 값.")
+    st.caption("일일계획은 월 공급량을 확정한 뒤 배분한 값이라 기온 기준이 아니므로, 기온 기준 예측과 별도로 비교용입니다.")
 
 
 def render_temp_effect_box(model, ts, target_date, day_temp, act_d, plan_d):
