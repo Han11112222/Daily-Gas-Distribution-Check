@@ -1514,7 +1514,7 @@ def run_tab1_management():
                              f"계획: {int(plan_val_gj):,} GJ", ABN_BG[kind_d], temp_html), unsafe_allow_html=True)
         if rank_text:
             if st.toggle("랭킹확인", value=False, key="show_rank"):   # 기본: 비활성화
-                st.markdown(f"<span style='font-size: 150%; color: red; font-weight: bold;'>{rank_text}</span><br><span style='font-size: 150%; color: black;'>(2014년 1월 1일 이후 랭킹)</span>", unsafe_allow_html=True)
+                st.markdown(f"<span style='font-size: 130%; color: red; font-weight: bold; white-space: nowrap;'>{rank_text}</span><br><span style='font-size: 150%; color: black;'>(2014년 1월 1일 이후 랭킹)</span>", unsafe_allow_html=True)
             if is_top_rank:
                 st.balloons()
                 st.toast("🎉 축하합니다! 역대 최고 공급량(1위)을 달성했습니다! 🎆")
@@ -1537,6 +1537,11 @@ def run_tab1_management():
         )
         st.markdown(kpi_card("월간 누적 달성률", rate_mtd, f"{int(a_mtd):,} GJ", a_mtd - p_mtd,
                              f"누적 계획: {int(p_mtd):,} GJ", ABN_BG[kind_m], m_html), unsafe_allow_html=True)
+        st.markdown(
+            "<a href='https://temperature-analysis-choihanyoub.streamlit.app/' target='_blank' rel='noopener' "
+            "style='display:inline-block;margin-top:8px;padding:6px 14px;border:1px solid #2563EB;border-radius:8px;"
+            "color:#2563EB;font-size:14px;font-weight:600;text-decoration:none;'>🌡️ 기온분석 바로가기</a>",
+            unsafe_allow_html=True)
 
     with col_g3:
         mask_ytd = (df['날짜'].dt.year == target_date.year) & (df['날짜'] <= target_date)
