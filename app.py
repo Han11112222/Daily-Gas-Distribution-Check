@@ -513,6 +513,11 @@ def render_abnormal_section(st_m, month: int, same_window: bool, upto_day: int):
     else:
         st.caption(f"※ {yr}년은 현재까지 자료 평균, 과거 연도는 {mo}월 전체 평균입니다. 점 크기=월 공급량(M3). "
                    "월 초·중순에는 위 '같은 기간 비교'를 켜면 더 정확합니다.")
+    st.markdown(
+        "<a href='https://temperature-analysis-choihanyoub.streamlit.app/' target='_blank' rel='noopener' "
+        "style='display:inline-block;margin-top:8px;padding:6px 14px;border:1px solid #2563EB;border-radius:8px;"
+        "color:#2563EB;font-size:14px;font-weight:600;text-decoration:none;'>🌡️ 기온분석 바로가기</a>",
+        unsafe_allow_html=True)
 
 
 def kpi_card(label: str, rate: float, value_txt: str, delta_val: float, plan_txt: str,
@@ -1537,11 +1542,6 @@ def run_tab1_management():
         )
         st.markdown(kpi_card("월간 누적 달성률", rate_mtd, f"{int(a_mtd):,} GJ", a_mtd - p_mtd,
                              f"누적 계획: {int(p_mtd):,} GJ", ABN_BG[kind_m], m_html), unsafe_allow_html=True)
-        st.markdown(
-            "<a href='https://temperature-analysis-choihanyoub.streamlit.app/' target='_blank' rel='noopener' "
-            "style='display:inline-block;margin-top:8px;padding:6px 14px;border:1px solid #2563EB;border-radius:8px;"
-            "color:#2563EB;font-size:14px;font-weight:600;text-decoration:none;'>🌡️ 기온분석 바로가기</a>",
-            unsafe_allow_html=True)
 
     with col_g3:
         mask_ytd = (df['날짜'].dt.year == target_date.year) & (df['날짜'] <= target_date)
