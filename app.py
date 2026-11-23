@@ -728,18 +728,18 @@ def render_prev_day_check(model, df, target_date):
     ca, cb, cc, cd_ = model["a"] / 1000.0, model["b"] / 1000.0, model["c"] / 1000.0, model["d"] / 1000.0   # MJ → GJ 계수
 
     def _coef(v):
-        return f"{abs(v):,.4g}"
+        return f"{abs(v):,.4f}"
 
     def _sgn(v, lead=False):
         return ("" if lead and v >= 0 else ("− " if v < 0 else "+ "))
 
-    eq_txt = (f"Q(T) = {_sgn(cd_, True)}{_coef(cd_)}·T³ {_sgn(cc)}{_coef(cc)}·T² "
+    eq_txt = (f"Q = {_sgn(cd_, True)}{_coef(cd_)}·T³ {_sgn(cc)}{_coef(cc)}·T² "
               f"{_sgn(cb)}{_coef(cb)}·T {_sgn(ca)}{_coef(ca)}")
     poly_head = (
         '<div style="flex:0 0 100%;border-bottom:1px dashed #C9CDD6;padding-bottom:10px;margin-bottom:4px;'
         'font-size:14px;line-height:1.7;color:#31333F;text-align:left;">'
         '<b>📐 3차 다항식</b> <span style="color:#808495;">(기온 T(℃)를 넣으면 공급량 Q(GJ)가 나옵니다)</span>'
-        f'<div style="font-family:monospace;font-size:15px;"><b>{eq_txt}</b></div>'
+        f'<div style="font-size:16px;"><b>{eq_txt}</b></div>'
         '</div>'
     )
     st.markdown(
