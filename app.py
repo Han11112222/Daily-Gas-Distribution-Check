@@ -724,8 +724,36 @@ def render_prev_day_check(model, df, target_date):
                 f'<div style="font-size:36px;line-height:1.3;color:#31333F;margin-top:6px;white-space:nowrap;">{value}</div>{extra}</div>')
     badge = (f'<div style="margin-top:6px;"><span style="font-size:16.8px;color:{d_color};background:{d_bg};'
              f'border-radius:14px;padding:3px 10px;">{"↑" if diff >= 0 else "↓"} 실적/예측 {pct:.1f}%</span></div>')
+    # ── 박스 좌측 상단: 3차 다항식과 실제 기온 대입 과정 (공급량 단위: GJ) ──
+    ca, cb, cc, cd_ = model["a"] / 1000.0, model["b"] / 1000.0, model["c"] / 1000.0, model["d"] / 1000.0   # MJ → GJ 계수
+
+    def _coef(v):
+        return f"{abs(v):,.4g}"
+
+    def _sgn(v, lead=False):
+        return ("" if lead and v >= 0 else ("− " if v < 0 else "+ "))
+
+    eq_txt = (f"Q(T) = {_sgn(cd_, True)}{_coef(cd_)}·T³ {_sgn(cc)}{_coef(cc)}·T² "
+              f"{_sgn(cb)}{_coef(cb)}·T {_sgn(ca)}{_coef(ca)}")
+    t_txt = f"{t_val:.1f}"
+    sub_txt = (f"Q({t_txt}) = {_sgn(cd_, True)}{_coef(cd_)}×({t_txt})³ {_sgn(cc)}{_coef(cc)}×({t_txt})² "
+               f"{_sgn(cb)}{_coef(cb)}×({t_txt}) {_sgn(ca)}{_coef(ca)}")
+    terms = [cd_ * t_val ** 3, cc * t_val ** 2, cb * t_val, ca]
+    terms_txt = " ".join(f"{'−' if v < 0 else '+'} {abs(v):,.0f}" if i else f"{'−' if v < 0 else ''}{abs(v):,.0f}"
+                         for i, v in enumerate(terms))
+    poly_head = (
+        '<div style="flex:0 0 100%;border-bottom:1px dashed #C9CDD6;padding-bottom:10px;margin-bottom:4px;'
+        'font-size:14px;line-height:1.7;color:#31333F;text-align:left;">'
+        '<div><b>📐 3차 다항식</b> <span style="color:#808495;">(기온 T(℃)를 넣으면 공급량 Q(GJ)가 나옵니다)</span></div>'
+        f'<div style="font-family:monospace;font-size:15px;"><b>{eq_txt}</b></div>'
+        f'<div style="color:#808495;">여기에 실제 평균기온 T = <b style="color:#1A73E8;">{t_txt}℃</b>를 넣으면</div>'
+        f'<div style="font-family:monospace;">{sub_txt}</div>'
+        f'<div style="font-family:monospace;">= {terms_txt} = <b style="color:#1A73E8;">{pred:,.0f} GJ</b></div>'
+        '</div>'
+    )
     st.markdown(
         '<div style="background:#F0F2F6;border-radius:10px;padding:18px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;">'
+        + poly_head
         + _item(f"실제기온 {t_val:.1f}℃ 적용", f"{pred:,.0f} GJ")
         + _item(f"{md} 실적", f"{act:,.0f} GJ")
         + _item("실적 − 예측", f"{diff:+,.0f} GJ", badge)
