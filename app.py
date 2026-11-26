@@ -17,6 +17,25 @@ from typing import Dict, List, Optional, Tuple
 # ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="도시가스 통합 관리 시스템", layout="wide")
 
+# ─────────────────────────────────────────────────────────
+# 접속 비밀번호 (첫 화면 로그인)
+# ─────────────────────────────────────────────────────────
+APP_PASSWORD = "1234"
+
+if not st.session_state.get("authenticated", False):
+    st.title("🔒 도시가스 통합 관리 시스템")
+    st.caption("접속하려면 비밀번호를 입력하세요.")
+    with st.form("login_form"):
+        _pw_input = st.text_input("비밀번호", type="password", key="login_pw")
+        _login_clicked = st.form_submit_button("로그인", type="primary")
+    if _login_clicked:
+        if _pw_input == APP_PASSWORD:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("비밀번호가 올바르지 않습니다.")
+    st.stop()
+
 # (달성률 카드는 아래 kpi_card()로 직접 그립니다)
 
 def set_korean_font():
